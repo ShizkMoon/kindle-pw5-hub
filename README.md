@@ -24,10 +24,11 @@ KPW5（第 11 代）优化与自动化管理知识库。
 ## 文档
 
 - [完整最佳实践指南](docs/guide.md) —— 从开箱设置到越狱 KOReader
-- [Calibre 自动化方案](docs/calibre-automation.md) —— Agent 操控 Calibre 的接口与工作流
-- [格式速查表](docs/format-cheatsheet.md) —— 格式选型、转换参数、推送对比
-- [AI 集成方案蓝图](docs/ai-integration-blueprint.md) —— KPW5 × dorm-workstation 全景设计（Calibre AI / MCP / 翻译管线）
 - [自主管线架构方案](docs/local-first-architecture.md) —— **当前采纳方案**：去亚马逊化，本地优先，AI 管线为骨干
+- [高质量处理管线](docs/pipeline-quality.md) —— 基于 EPUB 3.4 / KDP 指南 / KOReader 的排版质量标准
+- [格式速查表](docs/format-cheatsheet.md) —— 格式选型、转换参数、传书对比
+- [Calibre 自动化方案](docs/calibre-automation.md) —— Agent 操控 Calibre 的接口与工作流
+- [AI 集成方案蓝图](docs/ai-integration-blueprint.md) —— KPW5 × dorm-workstation 全景设计（Calibre AI / MCP / 翻译管线）
 
 ## 目录结构
 
@@ -36,10 +37,11 @@ kindle-pw5-hub/
 ├── README.md
 ├── docs/
 │   ├── guide.md                        # 完整优化指南
-│   ├── calibre-automation.md           # Calibre + Agent 集成方案
+│   ├── local-first-architecture.md     # ★ 自主管线架构（当前采纳方案）
+│   ├── pipeline-quality.md             # ★ 高质量处理管线（EPUB 排版标准）
 │   ├── format-cheatsheet.md            # 格式与转换速查
-│   ├── ai-integration-blueprint.md     # AI 集成蓝图（Calibre AI / MCP / 翻译管线）
-│   └── local-first-architecture.md     # ★ 自主管线架构（当前采纳方案）
+│   ├── calibre-automation.md           # Calibre + Agent 集成方案
+│   └── ai-integration-blueprint.md     # AI 集成蓝图（Calibre AI / MCP / 翻译管线）
 └── scripts/                            # 自动化脚本（待实现）
 ```
 
