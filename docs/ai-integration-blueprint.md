@@ -24,25 +24,24 @@
 │  └──────────────────────────────────────────────────────────────┘    │
 │       │              │              │                   │             │
 │       ▼              ▼              ▼                   ▼             │
-│  ┌────────┐   ┌──────────┐   ┌──────────┐   ┌──────────────────┐   │
-│  │Calibre │   │ Readwise │   │ Obsidian │   │  MCP Servers     │   │
-│  │ + AI   │   │  + MCP   │   │  Vault   │   │  (CalibreMCP,    │   │
-│  │Plugins │   │          │   │          │   │   access-calibre)│   │
-│  └────────┘   └──────────┘   └──────────┘   └──────────────────┘   │
+│  ┌──────────────┐   ┌──────────────────┐                         │
+│  │Calibre       │   │  MCP Servers     │                         │
+│  │ + AI Plugins │   │  (CalibreMCP,    │                         │
+│  │              │   │   access-calibre)│                         │
+│  └──────────────┘   └──────────────────┘                         │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-Kindle PW5 不再是一个孤立的阅读器，而是知识摄入层的硬件终端。它通过三条管道与 AI 体系连接：
+Kindle PW5 不再是一个孤立的阅读器，而是知识摄入层的硬件终端。它通过两条管道与 AI 体系连接：
 
 | 管道 | 方向 | 载体 |
 |---|---|---|
 | **内容输入** | 外部 → Kindle | Calibre / Send to Kindle / KOReader 云存储 |
-| **标注输出** | Kindle → AI 体系 | Readwise → Obsidian / My Clippings.txt |
 | **AI 增强** | AI → 阅读体验 | AI 摘要、翻译、元数据、推荐 |
 
 ---
 
-## 二、四条 AI 集成路线
+## 二、三条 AI 集成路线
 
 ### 路线 A：Calibre 原生 AI（最轻量）
 
@@ -104,46 +103,6 @@ calibremcp (FastMCP Server)
 
 calibremcp 是 access-calibre 的超集——前者偏"读"（浏览书库、读章节），后者偏"管"（搜索、元数据、RAG、格式转换）。
 
-### 路线 C：Readwise → Obsidian 知识管线（最成熟）
-
-这是目前最成熟、社区验证最充分的路线。核心链路：
-
-```
-Kindle PW5 (阅读+标注)
-    │  自动同步（Kindle 云端）
-    ▼
-Readwise (标注聚合中枢)
-    │  自动同步（Readwise Official Plugin）
-    ▼
-Obsidian Vault (E:\Knowledge\Vaults\Main)
-    │
-    ├── 生肉标注文件（自动生成的 Markdown）
-    ├── AI 处理（Claude Code / CherryStudio 调 LLM）
-    │   ├── 渐进式摘要（Progressive Summarization）
-    │   ├── 原子化笔记（Zettelkasten / Evergreen Notes）
-    │   └── 跨书概念页（Convergence + Divergence）
-    │
-    └── 输出
-        ├── 写作素材
-        ├── 研究资料
-        └── 可调用知识资产 (Skills)
-```
-
-**Readwise 定价**：~$8/月（有学生优惠？待确认）
-
-**关键插件：**
-- Readwise Official（Obsidian 社区插件）
-- Dataview / Bases（在 Obsidian 中创建动态标注仪表板）
-- Readwise MCP（Raycast AI 等可直接调 Readwise 搜索）
-
-**结合 dorm-workstation 的增强：**
-
-User Profile 里的 Obsidian vault 是 `E:\Knowledge\Vaults\Main`。这条管线打通后：
-- Kindle 标注自动流入 Obsidian
-- CherryStudio Agent 可定期处理未处理标注（`#readwise_inbox`），生成原子笔记
-- Claude Code 可通过 MCP 搜索 Readwise 知识库
-- Hermes 可通过 cron 报"本周阅读摘要"
-
 ### 路线 D：AI 翻译管线（双语阅读）
 
 [Ebook-Translator-Calibre-Plugin](https://github.com/bookfere/Ebook-Translator-Calibre-Plugin) 是书伴开发的 Calibre 插件（2.5K stars），支持：
@@ -178,7 +137,7 @@ User Profile 里的 Obsidian vault 是 `E:\Knowledge\Vaults\Main`。这条管线
 | **L0** | 原始提取 | EPUB/PDF | 纯文本 + 章节目录 | Calibre + ebook-convert |
 | **L1** | 焦点过滤 | L0 文本 + 研究问题 | 筛选后的相关章节 | Agent (Claude Code) |
 | **L2** | 阅读笔记 | L1 内容 | 9 段式结构化笔记 | CherryStudio / Claude Code |
-| **L3** | 跨书概念 | 多本书的 L2 笔记 | 概念页（收敛/分歧/综合） | Agent + Obsidian |
+| **L3** | 跨书概念 | 多本书的 L2 笔记 | 概念页（收敛/分歧/综合） | Agent + knowledge store |
 | **L3.5** | 主题综合 | L3 概念集群 | 权威矩阵 + 新书协议 | Agent + 人工审核 |
 | **L4** | 可调用技能 | L3.5 综合输出 | Skill 文件 | skill-creator → 注册 |
 
@@ -254,7 +213,7 @@ Hermes 作为常驻 IM Agent（MiniMax M3 驱动），可以承接 Kindle 相关
 → Hermes → CalibreMCP 语义搜索 → 返回结果
 
 用户 (WeChat): "最近一周我标注了什么"
-→ Hermes → Readwise MCP 查询 → 返回标注摘要
+→ Hermes → CalibreMCP 标注查询 → 返回标注摘要
 ```
 
 ### 5.3 定时任务
@@ -292,17 +251,14 @@ Calibre Library (E:\CalibreLibrary\)
         └── 检索: Agent 调 MCP → 相关知识块 → LLM 回答
 ```
 
-### 6.2 与 Obsidian 知识库的协同
+### 6.2 Calibre 作为独立 RAG 知识源
 
-```
-Calibre 书库 (结构化书源)
-    │  语义搜索
-    ▼
-Agent 回答时同时查:
-    ├── Calibre（书的内容）
-    ├── Readwise（我的标注）  ← 已过滤的个人视角
-    └── Obsidian（我的笔记）  ← 已消化的知识
-```
+Calibre 书库本身就是一个完整的知识源——它同时包含书的原始内容和通过标注工具（如 My Clippings.txt 或 KOReader 标注）导出的个人阅读数据。Agent 在做 RAG 时可以：
+- 通过 calibremcp 语义搜索书的内容
+- 通过标注文件查询个人阅读视角
+- 结合两者生成更精准的回答
+
+无需额外的第三方知识库，Calibre 即可作为独立的 RAG 后端。
 
 ---
 
@@ -339,10 +295,8 @@ Agent 回答时同时查:
 
 | 项目 | 费用 | 备注 |
 |---|---|---|
-| Readwise 订阅 | ~$8/月 (≈¥58) | 可先用免费版测试 |
 | Calibre 软件 | 免费 | 开源 |
 | CalibreMCP | 免费 | 开源 |
-| Obsidian | 免费（个人使用） | 已有 |
 | KOReader | 免费 | 开源 |
 
 ### 按用量计费（AI API）
@@ -368,10 +322,10 @@ Agent 回答时同时查:
 | 层级 | 措施 |
 |---|---|
 | **书籍数据** | Calibre 书库存本地（D 盘或 NAS），不上传云端 |
-| **标注数据** | Readwise 云端存储（敏感书籍可用本地 My Clippings.txt 替代） |
+| **标注数据** | 本地存储（My Clippings.txt / KOReader 标注文件），不上传云端 |
 | **AI 处理** | 通过 New API 网关统一管理 API key，不暴露原始 key 给各插件 |
 | **翻译内容** | 如需翻译敏感/个人书籍，优先用本地 Ollama 模型，不出机器 |
-| **备份** | Calibre 书库 + Readwise 标注 → dorm-workstation 备份体系（daily + SHA256） |
+| **备份** | Calibre 书库 → dorm-workstation 备份体系（daily + SHA256） |
 
 ---
 
@@ -382,7 +336,6 @@ Agent 回答时同时查:
 | 优先级 | 项目 | 投入 | 产出 | 时间 |
 |---|---|---|---|---|
 | **P0** | Calibre 原生 AI 功能启用 | 5 分钟配置 Ollama | 即时有 AI 问答 | 本周 |
-| **P1** | Readwise → Obsidian 管线 | 注册+插件配置 | 标注自动流入知识库 | 本周 |
 | **P1** | CalibreMCP 部署 | 安装配置 | Agent 可操作书库 | 本周 |
 | **P2** | Ebook-Translator 插件 | 安装+API key | 双语阅读 | 本月 |
 | **P2** | AI 标注处理工作流 | 写 prompt + 注册为 Skill | 标注 → 笔记自动化 | 本月 |
@@ -400,5 +353,4 @@ Agent 回答时同时查:
 - [book-summary-plugin (Claude Code)](https://github.com/mfalgorythmic/book-summary-plugin)
 - [reading-pipeline (5-layer)](https://github.com/noahnan-max/reading-pipeline)
 - [Ebook-Translator-Calibre-Plugin](https://github.com/bookfere/Ebook-Translator-Calibre-Plugin)
-- [Readwise Official Obsidian Plugin](https://docs.readwise.io/readwise/docs/exporting-highlights/obsidian)
 - [llmreader (Karpathy-style LLM co-reading)](https://github.com/yongkangc/llmreader)

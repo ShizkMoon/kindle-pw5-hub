@@ -39,12 +39,6 @@
 │  │                     WebDAV Server (Docker)                     │           │
 │  │  用途：KOReader ↔ PC 双向传书、同步标注、中转笔记                 │           │
 │  │  地址：已在 dorm-workstation deploy 中有 Radicale，可复用同一 Nginx  │           │
-│  └──────────────────────────┬───────────────────────────────────┘           │
-│                             │                                                │
-│                             ▼                                                │
-│  ┌──────────────────────────────────────────────────────────────┐           │
-│  │               Obsidian Vault (E:\Knowledge\Vaults\Main)        │           │
-│  │  自动导入 KOReader 标注 → Agent 处理 → 原子笔记 → 知识图谱      │           │
 │  └──────────────────────────────────────────────────────────────┘           │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -85,10 +79,10 @@ Kindle KOReader
     ├── Syncery → Syncthing → PC (实时同步进度/标注)
     │
     ├── HighlightSync → WebDAV (localhost:8181, Nginx 反代)
-    │     └── Agent 定期拉取 JSON → 处理 → Obsidian
+    │     └── Agent 定期拉取 JSON → 处理 → local knowledge store
     │
     └── 手动导出 Markdown → WebDAV 上传
-          └── Agent 监控目录 → 自动导入 Obsidian
+          └── Agent 监控目录 → 自动导入 local note directory
 ```
 
 ### 第 2 层：PC 中枢（Calibre + MCP + Sigil）
@@ -236,9 +230,9 @@ calibre_enrich_book_metadata(book_id=42)
     → 返回变更摘要
 ```
 
-#### 3.2 知识管线（KOReader → Agent → Obsidian）
+#### 3.2 知识管线（KOReader → Agent → local store）
 
-**无 Readwise 的替代方案：**
+AGENT 处理的替代方案：
 
 ```
 Kindle KOReader
@@ -260,10 +254,10 @@ Agent (Claude Code via MCP)
     ├── Step 2: 两阶段 AI 处理
     │   ├── Phase 1 (GLM-4.7): 去重、筛选高质量标注、格式整理
     │   └── Phase 2 (GLM-5.2): 深度综合、跨书连接、生成原子笔记
-    ├── Step 3: 写入 Obsidian Vault
-    │   ├── 原始标注文件 → 02_Raw/Readwise/ (Markdown)
-    │   ├── 原子笔记 → 03_Notes/Zettelkasten/ ([[wikilinks]])
-    │   └── MOC 更新 → 04_MOCs/ (地图更新)
+    ├── Step 3: 写入 local knowledge store
+    │   ├── 原始标注文件 → raw_highlights/ (Markdown)
+    │   ├── 原子笔记 → atomic_notes/ ([[wikilinks]])
+    │   └── MOC 更新 → maps_of_content/ (地图更新)
     └── Step 4: 清理 WebDAV 已处理文件
 ```
 
@@ -330,9 +324,9 @@ Agent (Claude Code via MCP)
    ├── 与已有笔记做 [[双向链接]]
    └── 识别与已读书籍的联系 (Convergence/Divergence)
        │
-6. 写入 Obsidian Vault
-   ├── 02_Raw/ 原始标注 (保留溯源)
-   ├── 03_Notes/ 原子笔记
+6. 写入 local knowledge store
+   ├── raw_highlights/ 原始标注 (保留溯源)
+   ├── atomic_notes/ 原子笔记
    └── 更新 MOC
        │
 7. Hermes 晨间简报: "昨日阅读《XXX》3章，新增标注12条，生成4条新笔记"
@@ -467,7 +461,7 @@ KOReader 端配置 Cloud Storage → WebDAV：
 | 日常推荐/搜索 | ~30 次/月 | MiniMax M3 | ~¥0.3 |
 | **合计** | | | **~¥3-4/月** |
 
-对比之前有 Readwise 的方案：**省掉了 ~$8/月 (≈¥58) 的 Readwise 订阅**，以 Agent 处理替代——成本更低，且完全自主可控。
+对比 external cloud sync services：**省掉了 ~$8/月 (≈¥58) 的外部订阅费用**，以 Agent 处理替代——成本更低，且完全自主可控。
 
 ---
 
@@ -475,13 +469,13 @@ KOReader 端配置 Cloud Storage → WebDAV：
 
 | 维度 | 之前方案（有亚马逊云） | 现在方案（去亚马逊化） |
 |---|---|---|
-| **Kindle 标注同步** | Amazon → Readwise → Obsidian | KOReader → WebDAV → Agent → Obsidian |
+| **Kindle 标注同步** | Amazon cloud → third-party sync → cloud vault | KOReader → WebDAV → Agent → local store |
 | **传书** | Send to Kindle 推送 | WebDAV / Calibre Wi-Fi / USB |
 | **多设备进度同步** | Whispersync | Syncery + Syncthing |
-| **标注处理** | Readwise 聚合 + AI | Agent 直接解析 JSON + AI 处理 |
-| **月费** | ~¥61 (Readwise $8 + AI ¥3-5) | ~¥3-4 (纯 AI) |
-| **隐私** | 标注经 Readwise 云端 | 标注经自家 WebDAV，全链路本机/自建 |
-| **依赖** | Amazon + Readwise 两项外部服务 | 零外部服务依赖 |
+| **标注处理** | 外部服务聚合 + AI | Agent 直接解析 JSON + AI 处理 |
+| **月费** | ~¥61 (external sync $8 + AI ¥3-5) | ~¥3-4 (纯 AI) |
+| **隐私** | 标注经外部云端 | 标注经自家 WebDAV，全链路本机/自建 |
+| **依赖** | Amazon + external sync 两项外部服务 | 零外部服务依赖 |
 
 ---
 
@@ -495,7 +489,7 @@ KOReader 端配置 Cloud Storage → WebDAV：
 | **P1** | KOReader Cloud Storage → WebDAV 配置 | 10 分钟 | 打通传书管道 |
 | **P1** | metadata-enricher MCP 开发 | 1-2 小时 | 元数据自动化 |
 | **P1** | Sigil 修复 Automate List 配置 | 30 分钟 | 格式自动修复 |
-| **P1** | KOReader 标注 → Markdown 导出管线 | 15 分钟 | 替代 Readwise |
+| **P1** | KOReader 标注 → Markdown 导出管线 | 15 分钟 | 替代外部云同步服务 |
 | **P2** | koreader-bridge MCP 开发 | 2-3 小时 | Agent 直连 KOReader |
 | **P2** | 标注 → 原子笔记 Agent 工作流 | 1-2 小时 | 知识提取自动化 |
 | **P2** | HighlightSync / Syncery 配置 | 20 分钟 | 多设备同步 |
@@ -514,5 +508,4 @@ KOReader 端配置 Cloud Storage → WebDAV：
 - [HighlightSync.koplugin](https://github.com/KarimMoustamid/highlightsync.koplugin)
 - [KOSyncthing+](https://github.com/d0nizam/kosyncthing_plus.koplugin)
 - [Calibre-Web-Automated Metadata System](https://github.com/crocodilestick/Calibre-Web-Automated)
-- [Global Book Search (Obsidian plugin)](https://github.com/ducktapekiller/global-book-search)
 - [Colibri Metadata Enrichment](https://colibri-hq.org/user-guide/metadata-enrichment)
