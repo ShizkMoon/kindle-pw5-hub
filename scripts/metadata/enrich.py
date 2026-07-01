@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """
-ISBN-based metadata enrichment tool.
+基于 ISBN 的元数据充实工具。
 
-Fetches book metadata from free public APIs (Open Library, Google Books)
-and outputs structured JSON or human-readable text. Can optionally push
-metadata directly into a Calibre library via calibredb.
+从免费公共 API（Open Library、Google Books）获取图书元数据，
+并输出结构化 JSON 或可读文本。可选地，可通过 calibredb
+将元数据直接推送到 Calibre 书库。
 
-Usage:
+用法:
     python enrich.py --isbn 9787544270878
     python enrich.py --isbn 9787544270878 --format text
     python enrich.py --title "Book Title" --author "Author Name"
     python enrich.py --isbn 9787544270878 --output calibre
     python enrich.py --isbn 9787544270878 --output calibre --format json
 
-Environment variables (optional / bonus):
-    NEW_API_URL  - URL of an AI-based merge/validation endpoint
-    NEW_API_KEY  - Bearer token for the AI endpoint
+环境变量（可选 / 增强功能）:
+    NEW_API_URL  - AI 合并/验证端点的 URL
+    NEW_API_KEY  - AI 端点的 Bearer 令牌
 """
 
 from __future__ import annotations
@@ -62,11 +62,39 @@ BASE_BACKOFF = 2.0
 
 
 # ---------------------------------------------------------------------------
+# 字段标签映射（仅用于文本输出模式）
+# ---------------------------------------------------------------------------
+
+_FIELD_LABELS: Dict[str, str] = {
+    "isbn": "ISBN",
+    "title": "标题",
+    "authors": "作者",
+    "publisher": "出版社",
+    "published_date": "出版日期",
+    "page_count": "页数",
+    "description": "简介",
+    "subjects": "主题",
+    "cover_url": "封面链接",
+}
+
+_SOURCE_LABELS: Dict[str, str] = {
+    "openlibrary_isbn": "Open Library ISBN",
+    "openlibrary_books": "Open Library 图书",
+    "google_books": "Google Books",
+    "openlibrary_search": "Open Library 搜索",
+    "user": "用户提供",
+    "ai_merged": "AI 合并",
+    "search_fallback": "搜索回退",
+    "unknown": "未知",
+}
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def _normalise_isbn(raw: str) -> str:
-    """Strip hyphens, spaces, and 'ISBN' prefix; return the raw digits."""
+    """去除连字符、空格和 'ISBN' 前缀；返回纯数字。"""
     s = raw.strip().upper()
     s = re.sub(r"^ISBN(?:-1[03])?:?\s*", "", s, flags=re.IGNORECASE)
     s = s.replace("-", "").replace(" ", "")
@@ -74,7 +102,7 @@ def _normalise_isbn(raw: str) -> str:
 
 
 def _fetch_json(url: str) -> Optional[Any]:
-    """GET *url*, parse JSON, with retry + exponential backoff on 429/5xx."""
+    """GET *url*，解析 JSON，遇到 429/5xx 时带指数退避重试。"""
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     for attempt in range(1, MAX_RETRIES + 1):
         try:
@@ -85,17 +113,17 @@ def _fetch_json(url: str) -> Optional[Any]:
             if exc.code in (429, 503):
                 wait = BASE_BACKOFF ** attempt
                 sys.stderr.write(
-                    f"[enrich] HTTP {exc.code} – retrying in {wait:.1f}s "
-                    f"(attempt {attempt}/{MAX_RETRIES})\n"
+                    f"[enrich] HTTP {exc.code} – {wait:.1f}秒后重试"
+                    f"（第 {attempt}/{MAX_RETRIES} 次尝试）\n"
                 )
                 time.sleep(wait)
                 continue
-            sys.stderr.write(f"[enrich] HTTP {exc.code} for {url}\n")
+            sys.stderr.write(f"[enrich] {url} 返回 HTTP {exc.code}\n")
             return None
         except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
-            sys.stderr.write(f"[enrich] Request failed: {exc}\n")
+            sys.stderr.write(f"[enrich] 请求失败: {exc}\n")
             return None
-    sys.stderr.write(f"[enrich] Exhausted retries for {url}\n")
+    sys.stderr.write(f"[enrich] {url} 重试次数已用完\n")
     return None
 
 
@@ -104,7 +132,7 @@ def _fetch_json(url: str) -> Optional[Any]:
 # ---------------------------------------------------------------------------
 
 class SourcedData:
-    """Holds the final structured metadata plus per-field provenance."""
+    """保存最终的结构化元数据及每个字段的来源。"""
 
     def __init__(self) -> None:
         self.data: Dict[str, Any] = {}
@@ -113,10 +141,10 @@ class SourcedData:
     def set_field(
         self, key: str, value: Any, source: str, *, overwrite: bool = False
     ) -> None:
-        """Store *value* under *key* and record its *source*.
+        """将 *value* 存入 *key* 并记录其 *source*。
 
-        By default, existing values are not overwritten (the first source
-        wins).  Pass *overwrite=True* to force an update.
+        默认情况下，已有值不会被覆盖（先到先得）。
+        传入 *overwrite=True* 可强制更新。
         """
         if key in self.data and not overwrite:
             return
@@ -124,7 +152,7 @@ class SourcedData:
         self.sources[key] = source
 
     def as_output(self, format: str = "json") -> str:
-        """Render the metadata as JSON or as human-readable text."""
+        """将元数据渲染为 JSON 或可读文本。"""
         if format == "json":
             result: Dict[str, Any] = {
                 "metadata": self.data,
@@ -134,14 +162,16 @@ class SourcedData:
         # -- text / human-readable
         lines: List[str] = []
         for key, val in self.data.items():
+            label = _FIELD_LABELS.get(key, key)
             src = self.sources.get(key, "unknown")
+            src_label = _SOURCE_LABELS.get(src, src)
             if isinstance(val, list):
-                lines.append(f"{key}:")
+                lines.append(f"{label}:")
                 for item in val:
                     lines.append(f"  - {item}")
             else:
-                lines.append(f"{key}: {val}")
-            lines.append(f"  ^-- source: {src}")
+                lines.append(f"{label}: {val}")
+            lines.append(f"  ^-- 来源: {src_label}")
             lines.append("")
         return "\n".join(lines)
 
@@ -151,19 +181,19 @@ class SourcedData:
 # ---------------------------------------------------------------------------
 
 def fetch_open_library_isbn(isbn: str) -> Optional[Dict[str, Any]]:
-    """Fetch the Open Library /isbn/{isbn}.json endpoint."""
+    """获取 Open Library /isbn/{isbn}.json 端点。"""
     url = OPEN_LIBRARY_ISBN_URL.format(isbn=isbn)
     return _fetch_json(url)
 
 
 def fetch_open_library_books(isbn: str) -> Optional[Dict[str, Any]]:
-    """Fetch the Open Library /api/books endpoint (richer data)."""
+    """获取 Open Library /api/books 端点（更丰富的数据）。"""
     url = OPEN_LIBRARY_BOOKS_URL.format(isbn=isbn)
     return _fetch_json(url)
 
 
 def fetch_google_books(isbn: str) -> Optional[Dict[str, Any]]:
-    """Fetch the Google Books API volumes endpoint."""
+    """获取 Google Books API volumes 端点。"""
     url = GOOGLE_BOOKS_URL.format(isbn=isbn)
     return _fetch_json(url)
 
@@ -171,7 +201,7 @@ def fetch_google_books(isbn: str) -> Optional[Dict[str, Any]]:
 def fetch_open_library_search(
     title: str, author: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
-    """Fallback search via Open Library's search API when ISBN is unavailable."""
+    """无 ISBN 时通过 Open Library 搜索 API 进行回退搜索。"""
     q = f"title:{title}"
     if author:
         q += f" author:{author}"
@@ -183,7 +213,7 @@ def fetch_open_library_search(
 def fetch_google_books_search(
     title: str, author: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
-    """Fallback search via Google Books when ISBN is unavailable."""
+    """无 ISBN 时通过 Google Books 进行回退搜索。"""
     q = f'intitle:"{title}"'
     if author:
         q += f' inauthor:"{author}"'
@@ -199,7 +229,7 @@ def fetch_google_books_search(
 def extract_open_library_isbn(
     data: Dict[str, Any]
 ) -> Tuple[Dict[str, Any], List[Tuple[str, str]]]:
-    """Extract fields from the /isbn/{isbn}.json payload."""
+    """从 /isbn/{isbn}.json 载荷中提取字段。"""
     fields: Dict[str, Any] = {}
     provenance: List[Tuple[str, str]] = []
     src = "openlibrary_isbn"
@@ -250,7 +280,7 @@ def extract_open_library_isbn(
 def extract_open_library_books(
     isbn: str, data: Dict[str, Any]
 ) -> Tuple[Dict[str, Any], List[Tuple[str, str]]]:
-    """Extract fields from the /api/books payload."""
+    """从 /api/books 载荷中提取字段。"""
     fields: Dict[str, Any] = {}
     provenance: List[Tuple[str, str]] = []
     src = "openlibrary_books"
@@ -327,7 +357,7 @@ def extract_open_library_books(
 def extract_google_books(
     data: Dict[str, Any]
 ) -> Tuple[Dict[str, Any], List[Tuple[str, str]]]:
-    """Extract fields from the Google Books API volumes payload."""
+    """从 Google Books API volumes 载荷中提取字段。"""
     fields: Dict[str, Any] = {}
     provenance: List[Tuple[str, str]] = []
     src = "google_books"
@@ -380,7 +410,7 @@ def extract_google_books(
 def extract_open_library_search(
     data: Dict[str, Any]
 ) -> Tuple[Dict[str, Any], List[Tuple[str, str]]]:
-    """Extract fields from Open Library's /search.json."""
+    """从 Open Library /search.json 中提取字段。"""
     fields: Dict[str, Any] = {}
     provenance: List[Tuple[str, str]] = []
     src = "openlibrary_search"
@@ -415,7 +445,7 @@ def extract_open_library_search(
 def extract_google_books_search(
     data: Dict[str, Any]
 ) -> Tuple[Dict[str, Any], List[Tuple[str, str]]]:
-    """Extract fields from Google Books search results."""
+    """从 Google Books 搜索结果中提取字段。"""
     return extract_google_books(data)  # Same payload structure
 
 
@@ -430,10 +460,9 @@ def _map_simple(
     src_name: str,
     mapping: Dict[str, str],
 ) -> None:
-    """Copy keys from *source* dict to *target* dict using *mapping*,
-    and record provenance.
+    """使用 *mapping* 将键从 *source* 字典复制到 *target* 字典，并记录来源。
 
-    *mapping* is {source_key: target_key}.
+    *mapping* 的格式为 {源键: 目标键}。
     """
     for sk, tk in mapping.items():
         if sk in source and source[sk] is not None:
@@ -442,7 +471,7 @@ def _map_simple(
 
 
 def _apply_fields(sd: SourcedData, fields: Dict[str, Any], prov: List[Tuple[str, str]]) -> None:
-    """Populate the SourcedData container from extracted fields and provenance."""
+    """将提取的字段和来源信息填充到 SourcedData 容器中。"""
     for key, value in fields.items():
         sd.set_field(key, value, "unknown")
     for key, src in prov:
@@ -454,12 +483,12 @@ def _apply_fields(sd: SourcedData, fields: Dict[str, Any], prov: List[Tuple[str,
 # ---------------------------------------------------------------------------
 
 def ai_merge_validate(sd: SourcedData) -> Optional[SourcedData]:
-    """If NEW_API_URL + NEW_API_KEY are set, POST the current metadata to an AI
-    endpoint that returns validated / merged data.
+    """如果设置了 NEW_API_URL + NEW_API_KEY，将当前元数据 POST 到 AI
+    端点，该端点返回已验证/合并的数据。
 
-    The endpoint is expected to accept JSON like:
+    端点应接受如下 JSON：
         {"metadata": ..., "sources": ...}
-    and return:
+    并返回：
         {"metadata": ..., "sources": ...}
     """
     api_url = os.environ.get("NEW_API_URL")
@@ -487,7 +516,7 @@ def ai_merge_validate(sd: SourcedData) -> Optional[SourcedData]:
         with urllib.request.urlopen(req, timeout=30) as resp:
             result = json.loads(resp.read().decode("utf-8"))
     except Exception as exc:
-        sys.stderr.write(f"[enrich] AI merge call failed: {exc}\n")
+        sys.stderr.write(f"[enrich] AI 合并调用失败: {exc}\n")
         return None
 
     new_sd = SourcedData()
@@ -503,12 +532,12 @@ def ai_merge_validate(sd: SourcedData) -> Optional[SourcedData]:
 # ---------------------------------------------------------------------------
 
 def push_to_calibre(sd: SourcedData, isbn: str) -> int:
-    """Find the book in the Calibre library by ISBN and update its metadata
-    via the ``calibredb`` CLI.
+    """按 ISBN 在 Calibre 书库中查找图书，并通过 ``calibredb`` CLI
+    更新其元数据。
 
-    Returns 0 on success, non-zero on failure.
+    成功返回 0，失败返回非零。
     """
-    # 1) Locate the book
+    # 1) 查找图书
     try:
         result = subprocess.run(
             ["calibredb", "search", f"isbn:{isbn}"],
@@ -518,30 +547,30 @@ def push_to_calibre(sd: SourcedData, isbn: str) -> int:
         )
     except FileNotFoundError:
         sys.stderr.write(
-            "[enrich] ERROR: calibredb not found. Is Calibre installed "
-            "and on PATH?\n"
+            "[enrich] 错误: 未找到 calibredb。Calibre 是否已安装"
+            "并在 PATH 中？\n"
         )
         return 1
     except subprocess.TimeoutExpired:
-        sys.stderr.write("[enrich] ERROR: calibredb search timed out.\n")
+        sys.stderr.write("[enrich] 错误: calibredb 搜索超时。\n")
         return 1
 
     if result.returncode != 0 or not result.stdout.strip():
         sys.stderr.write(
-            f"[enrich] No Calibre book found with ISBN {isbn}. "
-            f"Add the book to Calibre first.\n"
+            f"[enrich] 未找到 ISBN 为 {isbn} 的 Calibre 图书。"
+            f"请先将图书添加到 Calibre。\n"
         )
         return 1
 
     book_ids = result.stdout.strip().splitlines()
     if len(book_ids) > 1:
         sys.stderr.write(
-            f"[enrich] Multiple books match ISBN {isbn}, using first: "
+            f"[enrich] 多个图书匹配 ISBN {isbn}，使用第一个: "
             f"{book_ids[0]}\n"
         )
     book_id = book_ids[0].strip()
 
-    # 2) Build set-metadata args
+    # 2) 构建 set-metadata 参数
     args = ["calibredb", "set_metadata", book_id]
     md = sd.data
 
@@ -559,23 +588,23 @@ def push_to_calibre(sd: SourcedData, isbn: str) -> int:
         args.extend(["-t"] + [str(s) for s in md["subjects"]])
 
     if len(args) <= 3:
-        sys.stderr.write("[enrich] No metadata fields to push to Calibre.\n")
+        sys.stderr.write("[enrich] 没有可推送到 Calibre 的元数据字段。\n")
         return 0
 
     try:
         proc = subprocess.run(args, capture_output=True, text=True, timeout=30)
     except subprocess.TimeoutExpired:
-        sys.stderr.write("[enrich] ERROR: calibredb set_metadata timed out.\n")
+        sys.stderr.write("[enrich] 错误: calibredb set_metadata 超时。\n")
         return 1
 
     if proc.returncode != 0:
         sys.stderr.write(
-            f"[enrich] calibredb error: {proc.stderr or proc.stdout}\n"
+            f"[enrich] calibredb 错误: {proc.stderr or proc.stdout}\n"
         )
         return proc.returncode
 
     sys.stderr.write(
-        f"[enrich] Successfully updated Calibre metadata for book {book_id}.\n"
+        f"[enrich] 已成功更新图书 {book_id} 的 Calibre 元数据。\n"
     )
     return 0
 
@@ -592,15 +621,15 @@ def enrich(
     output_mode: str = "stdout",
     format: str = "json",
 ) -> int:
-    """Run the full enrichment pipeline.
+    """运行完整的元数据充实流水线。
 
-    Returns 0 on success, non-zero on failure.
+    成功返回 0，失败返回非零。
     """
     sd = SourcedData()
     norm_isbn = _normalise_bookid(isbn) if isbn else None
 
     # ------------------------------------------------------------------
-    # 1. ISBN-based lookup
+    # 1. ISBN 查找
     # ------------------------------------------------------------------
     if norm_isbn:
         sd.set_field("isbn", norm_isbn, "user")
@@ -624,24 +653,24 @@ def enrich(
             _apply_fields(sd, fields, prov)
 
     elif title:
-        # 2. Title / author fallback
+        # 2. 标题/作者回退
         sd.set_field("title", title, "user")
         if author:
             sd.set_field("authors", [author], "user")
 
-        # 2a. Open Library search
+        # 2a. Open Library 搜索
         ol_search = fetch_open_library_search(title, author)
         if ol_search:
             fields, prov = extract_open_library_search(ol_search)
             _apply_fields(sd, fields, prov)
 
-        # 2b. Google Books search
+        # 2b. Google Books 搜索
         gb_search = fetch_google_books_search(title, author)
         if gb_search:
             fields, prov = extract_google_books_search(gb_search)
             _apply_fields(sd, fields, prov)
 
-        # If we discovered an ISBN from search, try the richer ISBN endpoints
+        # 如果从搜索中发现了 ISBN，尝试更丰富的 ISBN 端点
         discovered_isbn = sd.data.get("isbn")
         if discovered_isbn:
             sd.set_field("isbn", _normalise_bookid(str(discovered_isbn)), "search_fallback", overwrite=True)
@@ -656,26 +685,26 @@ def enrich(
                 _apply_fields(sd, fields, prov)
     else:
         sys.stderr.write(
-            "[enrich] ERROR: Provide --isbn or both --title and --author.\n"
+            "[enrich] 错误: 请提供 --isbn，或同时提供 --title 和 --author。\n"
         )
         return 2
 
     # ------------------------------------------------------------------
-    # 3. AI merge (bonus)
+    # 3. AI 合并（增强功能）
     # ------------------------------------------------------------------
     merged = ai_merge_validate(sd)
     if merged is not None:
         sd = merged
-        sys.stderr.write("[enrich] Applied AI multi-source merge.\n")
+        sys.stderr.write("[enrich] 已应用 AI 多源合并。\n")
 
     # ------------------------------------------------------------------
-    # 4. Output
+    # 4. 输出
     # ------------------------------------------------------------------
     if output_mode == "calibre":
         target_isbn = norm_isbn or sd.data.get("isbn") or ""
         if not target_isbn:
             sys.stderr.write(
-                "[enrich] ERROR: Cannot push to Calibre without an ISBN.\n"
+                "[enrich] 错误: 没有 ISBN 无法推送到 Calibre。\n"
             )
             return 1
         return push_to_calibre(sd, target_isbn)
@@ -685,8 +714,8 @@ def enrich(
 
 
 def _normalise_bookid(raw: str) -> str:
-    """Same as _normalise_isbn but also handles other book identifiers by
-    returning them cleaned."""
+    """与 _normalise_isbn 相同，但也可处理其他图书标识符，
+    返回清理后的结果。"""
     return _normalise_isbn(raw)
 
 
@@ -696,47 +725,47 @@ def _normalise_bookid(raw: str) -> str:
 
 def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(
-        description="ISBN-based book metadata enrichment tool.",
+        description="基于 ISBN 的图书元数据充实工具。",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
+示例:
   python enrich.py --isbn 9787544270878
   python enrich.py --isbn 9787544270878 --format text
   python enrich.py --title "The Great Gatsby" --author "Fitzgerald"
   python enrich.py --isbn 9787544270878 --output calibre
 
-Environment variables:
-  NEW_API_URL    AI merge/validation endpoint (optional)
-  NEW_API_KEY    Bearer token for the AI endpoint (optional)
+环境变量:
+  NEW_API_URL    AI 合并/验证端点（可选）
+  NEW_API_KEY    AI 端点的 Bearer 令牌（可选）
         """.strip(),
     )
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument(
         "--isbn", metavar="ISBN",
-        help="ISBN-10 or ISBN-13 of the book.",
+        help="图书的 ISBN-10 或 ISBN-13。",
     )
     group.add_argument(
         "--title", metavar="TITLE",
-        help="Book title (requires --author for title-based search).",
+        help="图书标题（需要配合 --author 进行标题搜索）。",
     )
     parser.add_argument(
         "--author", metavar="AUTHOR",
-        help="Book author (required when using --title).",
+        help="图书作者（使用 --title 时必需）。",
     )
     parser.add_argument(
         "--output", choices=["stdout", "calibre"], default="stdout",
-        help="Where to send results: 'stdout' (default) or 'calibre'.",
+        help="结果输出位置: 'stdout'（默认）或 'calibre'。",
     )
     parser.add_argument(
         "--format", choices=["json", "text"], default="json",
-        help="Output format: 'json' (default) or 'text' (human-readable).",
+        help="输出格式: 'json'（默认）或 'text'（可读文本）。",
     )
 
     args = parser.parse_args(argv)
 
     # Validate --title + --author combination
     if args.title and not args.author:
-        parser.error("--author is required when using --title.")
+        parser.error("使用 --title 时必须提供 --author。")
 
     exit_code = enrich(
         isbn=args.isbn,

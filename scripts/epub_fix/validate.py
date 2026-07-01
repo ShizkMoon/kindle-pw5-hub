@@ -1,18 +1,17 @@
 #!/usr/bin/env python3
 """
-EPUB validator wrapper for EPUBCheck.
+EPUBCheck 的 EPUB 验证器封装。
 
-Wraps the EPUBCheck Java tool to validate EPUB files and presents
-a clean summary of the results.
+封装 EPUBCheck Java 工具以验证 EPUB 文件，并以清晰的摘要形式呈现验证结果。
 
-Usage:
+用法：
     python validate.py book.epub
     python validate.py book.epub --quiet
     python validate.py book.epub --epubcheck-jar /path/to/epubcheck.jar
 
-Requires:
-    - Java Runtime Environment (JRE 8+)
-    - epubcheck.jar (auto-detected or specified via --epubcheck-jar)
+依赖：
+    - Java 运行环境（JRE 8 或更高版本）
+    - epubcheck.jar（自动检测，或通过 --epubcheck-jar 指定）
 """
 
 import argparse
@@ -29,7 +28,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 def find_java() -> str | None:
-    """Return the path to the java executable, or None if not found."""
+    """返回 Java 可执行文件的路径，若未找到则返回 None。"""
     java = shutil.which("java")
     if java:
         return java
@@ -47,13 +46,13 @@ def find_java() -> str | None:
 
 def find_epubcheck_jar(script_dir: str) -> str | None:
     """
-    Search for epubcheck.jar in well-known locations.
+    在常用位置搜索 epubcheck.jar。
 
-    Order of precedence:
-      1. Same directory as this script
-      2. Current working directory
-      3. Every directory on PATH
-      4. Common platform locations
+    查找优先级：
+      1. 本脚本所在目录
+      2. 当前工作目录
+      3. PATH 中的每个目录
+      4. 各平台的常见路径
     """
     candidates: list[str] = []
 
@@ -99,7 +98,7 @@ def find_epubcheck_jar(script_dir: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 def _safe_location(msg: dict) -> dict[str, object]:
-    """Extract the primary location from an EPUBCheck message dict."""
+    """从 EPUBCheck 消息字典中提取主要位置信息。"""
     locations = msg.get("locations") or []
     if locations:
         loc = locations[0]
@@ -113,13 +112,13 @@ def _safe_location(msg: dict) -> dict[str, object]:
 
 def parse_epubcheck_output(raw_json: str):
     """
-    Parse EPUBCheck JSON output.
+    解析 EPUBCheck 的 JSON 输出。
 
-    Returns
+    返回值
     -------
     tuple[list[dict], list[dict], list[dict]]
-        (errors, warnings, infos) -- each entry is a dict with keys
-        id, message, suggestion, file, line, column.
+        (错误, 警告, 信息) —— 每项为一个字典，包含以下键：
+        id, message, suggestion, file, line, column。
     """
     data = json.loads(raw_json)
 
@@ -167,52 +166,52 @@ def parse_epubcheck_output(raw_json: str):
 # ---------------------------------------------------------------------------
 
 def _format_location(entry: dict) -> str:
-    """Build a human-readable location string from an issue entry."""
+    """根据问题条目构建可读的位置字符串。"""
     parts: list[str] = []
     if entry["file"]:
         parts.append(str(entry["file"]))
     if entry["line"]:
-        loc = f"line {entry['line']}"
+        loc = f"第 {entry['line']} 行"
         if entry["column"]:
-            loc += f", col {entry['column']}"
+            loc += f"，第 {entry['column']} 列"
         parts.append(loc)
-    return " @ ".join(parts) if parts else "(no location)"
+    return " / ".join(parts) if parts else "（无位置信息）"
 
 
 def print_issue(entry: dict, label: str) -> None:
-    """Print a single validated issue to stdout."""
+    """向标准输出打印一条验证问题。"""
     loc_str = _format_location(entry)
-    print(f"  [{label}] {entry['id']}: {entry['message']}")
+    print(f"  [{label}] {entry['id']}：{entry['message']}")
     print(f"          {loc_str}")
     if entry.get("suggestion"):
-        print(f"          Hint: {entry['suggestion']}")
+        print(f"          提示：{entry['suggestion']}")
 
 
 def print_summary(epub_path: str, errors: list, warnings: list,
                   infos: list, quiet: bool) -> None:
-    """Print the full validation summary."""
+    """打印完整的验证摘要。"""
     epub_name = os.path.basename(epub_path)
     total = len(errors) + len(warnings) + len(infos)
 
-    print(f"EPUBCheck Results for: {epub_name}")
+    print(f"EPUBCheck 验证结果：{epub_name}")
     print("=" * 60)
-    print(f"  Errors:   {len(errors)}")
-    print(f"  Warnings: {len(warnings)}")
-    print(f"  Info:     {len(infos)}")
-    print(f"  Total:    {total}")
+    print(f"  错误：  {len(errors)}")
+    print(f"  警告：  {len(warnings)}")
+    print(f"  信息：  {len(infos)}")
+    print(f"  合计：  {total}")
     print()
 
     if total == 0:
-        print("No issues found -- EPUB is valid.")
+        print("未发现问题 —— EPUB 验证通过。")
         return
 
     # Errors are always printed
     if errors:
         print("-" * 60)
-        print(f"ERRORS ({len(errors)}):")
+        print(f"错误（{len(errors)}）：")
         print()
         for entry in errors:
-            print_issue(entry, "ERROR")
+            print_issue(entry, "错误")
         print()
 
     if quiet:
@@ -220,18 +219,18 @@ def print_summary(epub_path: str, errors: list, warnings: list,
 
     if warnings:
         print("-" * 60)
-        print(f"WARNINGS ({len(warnings)}):")
+        print(f"警告（{len(warnings)}）：")
         print()
         for entry in warnings:
-            print_issue(entry, "WARNING")
+            print_issue(entry, "警告")
         print()
 
     if infos:
         print("-" * 60)
-        print(f"INFO ({len(infos)}):")
+        print(f"信息（{len(infos)}）：")
         print()
         for entry in infos:
-            print_issue(entry, "INFO")
+            print_issue(entry, "信息")
         print()
 
 
@@ -241,10 +240,10 @@ def print_summary(epub_path: str, errors: list, warnings: list,
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        description="Validate EPUB files using EPUBCheck.",
+        description="使用 EPUBCheck 验证 EPUB 文件。",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
+示例：
   python validate.py book.epub
   python validate.py book.epub --quiet
   python validate.py book.epub --epubcheck-jar /opt/epubcheck/epubcheck.jar
@@ -252,53 +251,53 @@ Examples:
     )
     parser.add_argument(
         "epub",
-        help="Path to the EPUB file to validate",
+        help="要验证的 EPUB 文件路径",
     )
     parser.add_argument(
         "--quiet", "-q",
         action="store_true",
-        help="Only print errors (suppress warnings and info messages)",
+        help="仅显示错误（隐藏警告和信息）",
     )
     parser.add_argument(
         "--epubcheck-jar",
         dest="epubcheck_jar",
         default=None,
-        help="Path to epubcheck.jar (overrides auto-detection)",
+        help="epubcheck.jar 的路径（覆盖自动检测）",
     )
     args = parser.parse_args(argv)
 
     # --- sanity checks --------------------------------------------------
     if not os.path.isfile(args.epub):
-        print(f"Error: EPUB file not found: {args.epub}", file=sys.stderr)
+        print(f"错误：找不到 EPUB 文件：{args.epub}", file=sys.stderr)
         sys.exit(2)
 
     java_path = find_java()
     if not java_path:
-        print("Error: Java not found.", file=sys.stderr)
+        print("错误：未找到 Java。", file=sys.stderr)
         print("", file=sys.stderr)
-        print("EPUBCheck requires a Java Runtime Environment (JRE 8 or later).", file=sys.stderr)
-        print("Install Java from https://adoptium.net/ or your system package manager.", file=sys.stderr)
+        print("EPUBCheck 需要 Java 运行环境（JRE 8 或更高版本）。", file=sys.stderr)
+        print("请从 https://adoptium.net/ 或系统包管理器安装 Java。", file=sys.stderr)
         sys.exit(2)
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     if args.epubcheck_jar:
         jar_path = args.epubcheck_jar
         if not os.path.isfile(jar_path):
-            print(f"Error: epubcheck.jar not found at: {jar_path}", file=sys.stderr)
+            print(f"错误：在以下路径找不到 epubcheck.jar：{jar_path}", file=sys.stderr)
             sys.exit(2)
     else:
         jar_path = find_epubcheck_jar(script_dir)
         if not jar_path:
-            print("Error: epubcheck.jar not found.", file=sys.stderr)
+            print("错误：找不到 epubcheck.jar。", file=sys.stderr)
             print(file=sys.stderr)
-            print("EPUBCheck is required to validate EPUB files.", file=sys.stderr)
-            print("Download it from: https://github.com/w3c/epubcheck/releases", file=sys.stderr)
+            print("验证 EPUB 文件需要 EPUBCheck。", file=sys.stderr)
+            print("请从以下地址下载：https://github.com/w3c/epubcheck/releases", file=sys.stderr)
             print(file=sys.stderr)
-            print("Place epubcheck.jar in one of these locations:", file=sys.stderr)
-            print(f"  * This script's directory: {script_dir}", file=sys.stderr)
-            print("  * Current working directory", file=sys.stderr)
-            print("  * Any directory in your PATH", file=sys.stderr)
-            print("  * Or use --epubcheck-jar to specify the path directly", file=sys.stderr)
+            print("请将 epubcheck.jar 放在以下任意位置：", file=sys.stderr)
+            print(f"  * 本脚本所在目录：{script_dir}", file=sys.stderr)
+            print("  * 当前工作目录", file=sys.stderr)
+            print("  * PATH 中的任意目录", file=sys.stderr)
+            print("  * 或使用 --epubcheck-jar 直接指定路径", file=sys.stderr)
             sys.exit(2)
 
     # --- run EPUBCheck --------------------------------------------------
@@ -312,13 +311,13 @@ Examples:
             timeout=300,  # generous timeout for large EPUBs
         )
     except subprocess.TimeoutExpired:
-        print("Error: EPUBCheck timed out after 300 seconds.", file=sys.stderr)
+        print("错误：EPUBCheck 在 300 秒后超时。", file=sys.stderr)
         sys.exit(2)
     except FileNotFoundError:
-        print("Error: Java executable not found at runtime.", file=sys.stderr)
+        print("错误：运行时找不到 Java 可执行文件。", file=sys.stderr)
         sys.exit(2)
     except Exception as exc:
-        print(f"Error: Failed to run EPUBCheck: {exc}", file=sys.stderr)
+        print(f"错误：运行 EPUBCheck 失败：{exc}", file=sys.stderr)
         sys.exit(2)
 
     # If epubcheck itself returned non-zero it still produced JSON on stdout
@@ -329,26 +328,26 @@ Examples:
     if not raw_output:
         # epubcheck sometimes writes errors to stderr and nothing to stdout.
         if result.stderr.strip():
-            print("Error: EPUBCheck produced no parseable output.", file=sys.stderr)
+            print("错误：EPUBCheck 未产生可解析的输出。", file=sys.stderr)
             print(file=sys.stderr)
-            print("stderr:", file=sys.stderr)
+            print("stderr：", file=sys.stderr)
             print(result.stderr.strip(), file=sys.stderr)
         else:
-            print("Error: EPUBCheck produced no output.", file=sys.stderr)
+            print("错误：EPUBCheck 未产生任何输出。", file=sys.stderr)
         sys.exit(2)
 
     # --- parse output ---------------------------------------------------
     try:
         errors, warnings, infos = parse_epubcheck_output(raw_output)
     except (json.JSONDecodeError, ValueError) as exc:
-        print(f"Error: Failed to parse EPUBCheck JSON output: {exc}", file=sys.stderr)
+        print(f"错误：解析 EPUBCheck JSON 输出失败：{exc}", file=sys.stderr)
         print(file=sys.stderr)
-        print("Raw output received:", file=sys.stderr)
+        print("收到的原始输出：", file=sys.stderr)
         # Print first 3000 characters to avoid overwhelming the terminal
         print(raw_output[:3000], file=sys.stderr)
         if result.stderr.strip():
             print(file=sys.stderr)
-            print("stderr:", file=sys.stderr)
+            print("stderr：", file=sys.stderr)
             print(result.stderr.strip()[:2000], file=sys.stderr)
         sys.exit(2)
 

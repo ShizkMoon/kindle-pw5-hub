@@ -1,14 +1,15 @@
 """
-TXT → EPUB Processing Pipeline
+TXT → EPUB 处理流水线
 
-Full automated pipeline for converting raw TXT files (especially Chinese web novels)
-to professional-quality EPUB files suitable for KOReader.
+将原始 TXT 文件自动转换为适用于 KOReader 的专业品质 EPUB 文件。
+本工具针对中文网络小说（网文）优化，内置章节检测、垃圾广告过滤、
+中文段落重组和简繁转换等功能。
 
-Usage:
-    python pipeline.py input.txt -t "Book Title" -a "Author Name"
-    python pipeline.py input.txt -t "Title" --s2t --ai-chapter
+用法:
+    python pipeline.py input.txt -t "书名" -a "作者"
+    python pipeline.py input.txt -t "书名" --s2t --ai-chapter
 
-Dependencies:
+依赖:
     pip install ebooklib charset-normalizer opencc
 """
 
@@ -25,11 +26,15 @@ import charset_normalizer
 from ebooklib import epub
 
 
-# ── Chapter Detection ──────────────────────────────────────────────────────
+# ── 章节检测 ──────────────────────────────────────────────────────────────────
 
 CHAPTER_PATTERNS = [
-    # Chinese: 第X章, 第X回, 第X卷, 第X节, 第X部, 第X集, 第X篇
+    # 中文网文常见格式：第X章、第X回、第X卷、第X节、第X部、第X集、第X篇
     re.compile(r'^第[0-9零一二三四五六七八九十百千万]+[章回卷节部集篇].*$'),
+    # 中文补丁格式：第X章（带摘要）、序章、终章、番外、后记等
+    re.compile(r'^第[0-9零一二三四五六七八九十百千万]+\s*[章回卷节部集篇话].*$'),
+    # 纯数字章节（网文常用）：第0001章 等补零格式
+    re.compile(r'^第\d{3,}[章回].*$'),
     # English: Chapter X, Part X, Book X
     re.compile(r'^(?:Chapter|Part|Book|Volume)\s+\d+.*$', re.IGNORECASE),
     # Roman numerals: Part I, Book II
@@ -38,7 +43,7 @@ CHAPTER_PATTERNS = [
     re.compile(r'^\d+[\.\、\s]+.+$'),
 ]
 
-# Website garbage patterns (configurable)
+# 网站垃圾广告匹配规则（可配置）
 GARBAGE_PATTERNS = [
     re.compile(r'本章未完.*请点击'),
     re.compile(r'记住本站.*'),
@@ -52,17 +57,17 @@ GARBAGE_PATTERNS = [
 
 
 def detect_encoding(filepath: str) -> str:
-    """Auto-detect text file encoding."""
+    """自动检测文本文件编码。"""
     with open(filepath, 'rb') as f:
         raw = f.read()
     result = charset_normalizer.from_bytes(raw).best()
     if result is None:
-        raise ValueError(f"Cannot detect encoding for {filepath}")
+        raise ValueError(f"无法检测文件编码: {filepath}")
     return result.encoding
 
 
 def read_text(filepath: str) -> str:
-    """Read text file with auto encoding detection."""
+    """使用自动编码检测读取文本文件。"""
     encoding = detect_encoding(filepath)
     with open(filepath, 'r', encoding=encoding, errors='replace') as f:
         return f.read()
@@ -70,8 +75,10 @@ def read_text(filepath: str) -> str:
 
 def detect_chapters(text: str) -> list[dict]:
     """
-    Detect chapter structure from text.
-    Returns list of {index, title, content_lines, start_line}.
+    检测文本中的章节结构。
+
+    返回:
+        list[dict]: 列表，每项为 {index, title, content_lines, start_line}
     """
     lines = text.split('\n')
     chapter_boundaries = []
@@ -105,7 +112,7 @@ def detect_chapters(text: str) -> list[dict]:
             'start_line': start,
         })
 
-    # Handle pre-first-chapter content as "简介"
+    # 将首个章节之前的正文内容作为"简介"处理
     first_start = chapter_boundaries[0]['line_index']
     if first_start > 0:
         intro_content = [l for l in lines[:first_start] if l.strip()]
@@ -121,7 +128,7 @@ def detect_chapters(text: str) -> list[dict]:
 
 
 def filter_garbage(lines: list[str]) -> list[str]:
-    """Remove website garbage and ad lines."""
+    """移除网站垃圾内容和广告行。"""
     cleaned = []
     for line in lines:
         stripped = line.strip()
@@ -136,15 +143,16 @@ def filter_garbage(lines: list[str]) -> list[str]:
 
 def merge_hard_linebreaks(lines: list[str]) -> list[str]:
     """
-    Merge single hard linebreaks within Chinese paragraphs.
-    Criteria: previous line ends with CJK/punctuation, next line starts with CJK.
+    合并中文段落内的单行硬换行。
+
+    判断标准：上一行以 CJK 字符或中文标点结尾，下一行以 CJK 字符开头。
     """
     CJK_RANGE = (
         '\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff'
         '\u3000-\u303f\uff00-\uffef\u2e80-\u2eff\u31c0-\u31ef'
     )
     cjk_char = re.compile(f'[{CJK_RANGE}]')
-    cjk_end = re.compile(f'[{CJK_RANGE}〕》）」』】"\'\\-]$')
+    cjk_end = re.compile(f'[{CJK_RANGE}〕》）」』【】"\'\\-]$')
     cjk_start = re.compile(f'^[{CJK_RANGE}〔《（「『【]')
 
     merged = []
@@ -178,7 +186,7 @@ def merge_hard_linebreaks(lines: list[str]) -> list[str]:
 
 
 def normalize_paragraphs(lines: list[str]) -> list[str]:
-    """Normalize paragraph formatting."""
+    """规范化段落格式。"""
     result = []
     for line in lines:
         stripped = line.strip()
@@ -192,8 +200,9 @@ def normalize_paragraphs(lines: list[str]) -> list[str]:
 
 def ai_chapter_detect(text_sample: str) -> Optional[dict]:
     """
-    Use AI to detect chapter structure when regex fails.
-    Requires NEW_API_URL and NEW_API_KEY environment variables.
+    当正则表达式匹配失败时，使用 AI 辅助检测章节结构。
+
+    需要设置环境变量 NEW_API_URL 和 NEW_API_KEY。
     """
     api_url = os.environ.get('NEW_API_URL')
     api_key = os.environ.get('NEW_API_KEY')
@@ -241,7 +250,7 @@ Text sample (first 3000 chars):
     return None
 
 
-# ── EPUB Building ──────────────────────────────────────────────────────────
+# ── EPUB 构建 ─────────────────────────────────────────────────────────────────
 
 STANDARD_CSS = """
 /* === Base === */
@@ -326,7 +335,7 @@ def build_epub(
     language: str = 'zh',
     cover_path: Optional[str] = None,
 ) -> epub.EpubBook:
-    """Build EPUB from chapter data."""
+    """根据章节数据构建 EPUB 文件。"""
     book = epub.EpubBook()
 
     # Metadata
@@ -401,28 +410,28 @@ def build_epub(
 
 
 def convert_to_simplified(text: str) -> str:
-    """Convert Traditional Chinese to Simplified using OpenCC."""
+    """使用 OpenCC 将繁体中文转换为简体中文。"""
     try:
         import opencc
         cc = opencc.OpenCC('t2s.json')
         return cc.convert(text)
     except ImportError:
-        print("Warning: opencc not installed, skipping conversion", file=sys.stderr)
+        print("警告：opencc 未安装，跳过转换", file=sys.stderr)
         return text
 
 
 def convert_to_traditional(text: str) -> str:
-    """Convert Simplified Chinese to Traditional using OpenCC."""
+    """使用 OpenCC 将简体中文转换为繁体中文。"""
     try:
         import opencc
         cc = opencc.OpenCC('s2t.json')
         return cc.convert(text)
     except ImportError:
-        print("Warning: opencc not installed, skipping conversion", file=sys.stderr)
+        print("警告：opencc 未安装，跳过转换", file=sys.stderr)
         return text
 
 
-# ── Main Pipeline ──────────────────────────────────────────────────────────
+# ── 主流水线 ──────────────────────────────────────────────────────────────────
 
 def pipeline(
     input_path: str,
@@ -436,47 +445,47 @@ def pipeline(
     language: str = 'zh',
 ) -> str:
     """
-    Execute the full TXT → EPUB pipeline.
+    执行完整的 TXT → EPUB 转换流水线。
 
-    Args:
-        input_path: Path to input TXT file
-        title: Book title
-        author: Author name
-        output_path: Output EPUB path (default: input_stem.epub)
-        s2t: Convert Simplified to Traditional
-        t2s: Convert Traditional to Simplified
-        ai_chapter: Use AI for chapter detection if regex fails
-        cover: Path to cover image
-        language: EPUB language code
+    参数:
+        input_path: 输入 TXT 文件路径
+        title: 书名
+        author: 作者
+        output_path: 输出 EPUB 路径（默认: 与输入文件同名，后缀 .epub）
+        s2t: 简体中文转繁体中文
+        t2s: 繁体中文转简体中文
+        ai_chapter: 正则匹配失败时使用 AI 检测章节
+        cover: 封面图片路径
+        language: EPUB 语言代码（默认: zh）
 
-    Returns:
-        Path to generated EPUB file
+    返回:
+        str: 生成的 EPUB 文件路径
     """
     if output_path is None:
         output_path = Path(input_path).with_suffix('.epub')
 
-    print(f"[1/7] Reading: {input_path}")
+    print(f"[1/7] 读取文件: {input_path}")
     text = read_text(input_path)
-    print(f"      Encoding: {detect_encoding(input_path)}, Chars: {len(text)}")
+    print(f"      编码: {detect_encoding(input_path)}，字符数: {len(text)}")
 
-    print("[2/7] Chapter detection...")
+    print("[2/7] 检测章节结构...")
     chapters = detect_chapters(text)
 
     if not chapters or all(ch['title'] == '正文' for ch in chapters):
         if ai_chapter:
-            print("      Regex failed, trying AI...")
+            print("      正则匹配失败，尝试 AI 辅助检测...")
             ai_result = ai_chapter_detect(text)
             if ai_result and ai_result.get('chapter_pattern'):
                 pattern = ai_result['chapter_pattern']
-                print(f"      AI detected pattern: {pattern}")
+                print(f"      AI 检测到章节模式: {pattern}")
                 CHAPTER_PATTERNS.insert(0, re.compile(pattern))
                 chapters = detect_chapters(text)
 
     # Remove the "简介" if it's empty
     chapters = [ch for ch in chapters if any(l.strip() for l in ch['content_lines'])]
-    print(f"      Found {len(chapters)} chapters/sections")
+    print(f"      共检测到 {len(chapters)} 个章节")
 
-    print("[3/7] Cleaning content...")
+    print("[3/7] 清理广告和格式化文本...")
     for ch in chapters:
         ch['content_lines'] = filter_garbage(ch['content_lines'])
         ch['content_lines'] = merge_hard_linebreaks(ch['content_lines'])
@@ -484,7 +493,7 @@ def pipeline(
 
     # Flatten text for OpenCC
     if s2t or t2s:
-        print(f"[4/7] Character conversion ({'S2T' if s2t else 'T2S'})...")
+        print(f"[4/7] 字符转换 ({'简→繁' if s2t else '繁→简'})...")
         converter = convert_to_traditional if s2t else convert_to_simplified
         for ch in chapters:
             new_lines = []
@@ -492,42 +501,42 @@ def pipeline(
                 new_lines.append(converter(line) if line.strip() else line)
             ch['content_lines'] = new_lines
     else:
-        print("[4/7] Skipping character conversion")
+        print("[4/7] 跳过字符转换")
 
-    print("[5/7] Building EPUB...")
+    print("[5/7] 构建 EPUB 文件...")
     book = build_epub(chapters, title, author, language, cover)
 
-    print(f"[6/7] Writing: {output_path}")
+    print(f"[6/7] 写入文件: {output_path}")
     epub.write_epub(str(output_path), book)
 
     size_kb = os.path.getsize(output_path) / 1024
-    print(f"[7/7] Done: {output_path} ({size_kb:.0f} KB, {len(chapters)} chapters)")
+    print(f"[7/7] 完成! {output_path} ({size_kb:.0f} KB, {len(chapters)} 章)")
 
     return str(output_path)
 
 
-# ── CLI ────────────────────────────────────────────────────────────────────
+# ── 命令行接口 ────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
-        description='TXT → EPUB Pipeline for KOReader',
+        description='TXT → EPUB 转换流水线 — 专为中文网文优化，适用于 KOReader',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
-  python pipeline.py novel.txt -t "三体" -a "刘慈欣"
-  python pipeline.py novel.txt -t "Title" -a "Author" --ai-chapter --s2t
-  python pipeline.py novel.txt -t "Title" -a "Author" --cover cover.jpg
+示例:
+  python pipeline.py novel.txt -t "诡秘之主" -a "爱潜水的乌贼"
+  python pipeline.py novel.txt -t "斗破苍穹" -a "天蚕土豆" --ai-chapter --s2t
+  python pipeline.py novel.txt -t "凡人修仙传" -a "忘语" --cover cover.jpg
         """,
     )
-    parser.add_argument('input', help='Input TXT file')
-    parser.add_argument('-t', '--title', required=True, help='Book title')
-    parser.add_argument('-a', '--author', required=True, help='Author name')
-    parser.add_argument('-o', '--output', help='Output EPUB path')
-    parser.add_argument('--s2t', action='store_true', help='Simplified → Traditional')
-    parser.add_argument('--t2s', action='store_true', help='Traditional → Simplified')
-    parser.add_argument('--ai-chapter', action='store_true', help='Use AI for chapter detection')
-    parser.add_argument('--cover', help='Cover image path')
-    parser.add_argument('--lang', default='zh', help='Language code (default: zh)')
+    parser.add_argument('input', help='输入 TXT 文件路径')
+    parser.add_argument('-t', '--title', required=True, help='书名')
+    parser.add_argument('-a', '--author', required=True, help='作者名')
+    parser.add_argument('-o', '--output', help='输出 EPUB 文件路径')
+    parser.add_argument('--s2t', action='store_true', help='简体中文 → 繁体中文')
+    parser.add_argument('--t2s', action='store_true', help='繁体中文 → 简体中文')
+    parser.add_argument('--ai-chapter', action='store_true', help='正则匹配失败时使用 AI 检测章节')
+    parser.add_argument('--cover', help='封面图片路径')
+    parser.add_argument('--lang', default='zh', help='语言代码（默认: zh）')
 
     args = parser.parse_args()
 
@@ -543,9 +552,9 @@ Examples:
             cover=args.cover,
             language=args.lang,
         )
-        print(f"\n✓ EPUB generated: {output}")
+        print(f"\n✓ EPUB 文件已生成: {output}")
     except Exception as e:
-        print(f"\n✗ Error: {e}", file=sys.stderr)
+        print(f"\n✗ 出错: {e}", file=sys.stderr)
         sys.exit(1)
 
 

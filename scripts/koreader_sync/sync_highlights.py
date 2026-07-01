@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
-KOReader highlight synchronisation tool.
+KOReader 摘录同步工具。
 
-Parses KOReader JSON highlight files and converts them into structured
-formats suitable for Obsidian, general-purpose JSON pipelines, or
-plain-text reading.
+解析 KOReader JSON 摘录文件，并将其转换为适合 Obsidian、
+通用 JSON 流水线或纯文本阅读的结构化格式。
 
-Usage:
+用法:
     python sync_highlights.py --source /path/to/highlights.json
     python sync_highlights.py --source /path/to/book_sdr/ --output markdown
     python sync_highlights.py --source webdav://user:pass@host/koreader/highlights/
@@ -33,14 +32,14 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 # Constants
 # ---------------------------------------------------------------------------
 
-# Standard KOReader metadata filenames inside an SDR directory
+# KOReader SDR 目录中的标准元数据文件名
 METADATA_FILENAMES = (
     "metadata.lua",
     "metadata.json",
     "settings.reader.lua",
 )
 
-# Filename pattern: Author - Title_sdr  (common KOReader SDR naming)
+# 文件名模式: Author - Title_sdr（常见的 KOReader SDR 命名）
 _SDR_DIR_RE = re.compile(
     r"^(?P<author>.+?)\s*[-–—]\s*(?P<title>.+?)(?:_sdr)?$",
     re.IGNORECASE,
@@ -54,13 +53,13 @@ USER_AGENT = "koreader-sync/1.0 (highlight-tool)"
 # ---------------------------------------------------------------------------
 
 def _parse_webdav_url(url: str) -> Tuple[str, str, str, str]:
-    """Parse a ``webdav://user:pass@host/path`` URL into its components.
+    """将 ``webdav://user:pass@host/path`` URL 解析为各组成部分。
 
-    Returns ``(base_url, user, password, directory_path)``.
+    返回 ``(base_url, user, password, directory_path)``。
     """
-    # webdav://user:pass@host:port/path  -- strip scheme
+    # webdav://user:pass@host:port/path  -- 去除协议前缀
     rest = url[len("webdav://"):]
-    # Split auth from host+path
+    # 将认证信息与主机+路径分离
     if "@" in rest:
         auth, hostpath = rest.split("@", 1)
         if ":" in auth:
@@ -73,7 +72,7 @@ def _parse_webdav_url(url: str) -> Tuple[str, str, str, str]:
 
     base = f"http://{hostpath}"
     directory_path = "/"
-    # Extract path portion after the first /
+    # 提取第一个 / 之后的路径部分
     parts = hostpath.split("/", 1)
     if len(parts) == 2:
         directory_path = "/" + parts[1].rstrip("/") + "/"
@@ -82,7 +81,7 @@ def _parse_webdav_url(url: str) -> Tuple[str, str, str, str]:
 
 
 def _webdav_list(base: str, user: str, password: str, path: str) -> List[str]:
-    """PROPFIND *path* on the WebDAV server and return a list of hrefs."""
+    """对 WebDAV 服务器上的 *path* 执行 PROPFIND，返回 href 列表。"""
     import xml.etree.ElementTree as ET
 
     body = (
@@ -106,11 +105,11 @@ def _webdav_list(base: str, user: str, password: str, path: str) -> List[str]:
             raw = resp.read()
     except urllib.error.HTTPError as exc:
         sys.stderr.write(
-            f"[sync] WebDAV PROPFIND failed (HTTP {exc.code}) for {path}\n"
+            f"[sync] WebDAV PROPFIND 失败 (HTTP {exc.code})，路径: {path}\n"
         )
         return []
     except (urllib.error.URLError, OSError) as exc:
-        sys.stderr.write(f"[sync] WebDAV connection error: {exc}\n")
+        sys.stderr.write(f"[sync] WebDAV 连接错误: {exc}\n")
         return []
 
     root = ET.fromstring(raw)
@@ -124,7 +123,7 @@ def _webdav_list(base: str, user: str, password: str, path: str) -> List[str]:
 
 
 def _webdav_fetch(base: str, user: str, password: str, path: str) -> Optional[bytes]:
-    """GET a single file from WebDAV. Returns the raw bytes or *None*."""
+    """从 WebDAV GET 单个文件。返回原始字节或 *None*。"""
     req = urllib.request.Request(
         base.rstrip("/") + path,
         headers={"User-Agent": USER_AGENT},
@@ -139,7 +138,7 @@ def _webdav_fetch(base: str, user: str, password: str, path: str) -> Optional[by
             return resp.read()
     except Exception as exc:
         sys.stderr.write(
-            f"[sync] Failed to fetch WebDAV path {path}: {exc}\n"
+            f"[sync] 获取 WebDAV 路径 {path} 失败: {exc}\n"
         )
         return None
 
@@ -149,16 +148,16 @@ def _is_webdav(source: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# KOReader SDR metadata extraction
+# KOReader SDR 元数据提取
 # ---------------------------------------------------------------------------
 
 def _extract_sdr_metadata(
     sdr_dir: str,
 ) -> Dict[str, str]:
-    """Try to read metadata from a KOReader SDR directory.
+    """尝试从 KOReader SDR 目录读取元数据。
 
-    Looks for ``metadata.lua`` (simple line-based parsing) or
-    ``metadata.json``.
+    查找 ``metadata.lua``（简单的逐行解析）或
+    ``metadata.json``。
     """
     meta: Dict[str, str] = {}
 
@@ -174,7 +173,7 @@ def _extract_sdr_metadata(
             continue
 
         if fname.endswith(".lua"):
-            # Simple Lua key-value: key = "value" or key = [[value]]
+            # 简单的 Lua 键值: key = "value" 或 key = [[value]]
             for match in re.finditer(
                 r'''(\w+)\s*=\s*(?:\[\[(.+?)\]\]|"(.*?)"|'(.+?)')''',
                 raw,
@@ -199,19 +198,19 @@ def _extract_sdr_metadata(
 
 
 def _guess_metadata_from_path(source: str) -> Dict[str, str]:
-    """Heuristically extract title/author from the source path.
+    """从源路径中启发式提取标题/作者。
 
-    If the source is a directory named like ``Author - Title_sdr``,
-    parse it.
+    如果源是一个名为 ``Author - Title_sdr`` 的目录，
+    则进行解析。
     """
     meta: Dict[str, str] = {}
     if _is_webdav(source):
-        # Try to guess from the URL path
+        # 尝试从 URL 路径猜测
         path_part = urllib.parse.urlparse(source.replace("webdav://", "http://")).path
         dirname = os.path.basename(path_part.rstrip("/"))
     else:
         dirname = os.path.basename(source.rstrip(os.sep))
-        # If source is a file, use its parent dir name
+        # 如果源是文件，使用其父目录名
         if os.path.isfile(source):
             dirname = os.path.basename(os.path.dirname(source))
 
@@ -223,29 +222,29 @@ def _guess_metadata_from_path(source: str) -> Dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Highlight parsing & dedup
+# 摘录解析与去重
 # ---------------------------------------------------------------------------
 
 def parse_highlights(raw_json: str) -> List[Dict[str, Any]]:
-    """Parse a KOReader highlight JSON string into a list of dicts.
+    """将 KOReader 摘录 JSON 字符串解析为字典列表。
 
-    Expected format: a JSON array where each entry has keys like
-    ``text``, ``chapter``, ``datetime`` (or ``timestamp``), ``note``,
-    ``page``.
+    预期格式：一个 JSON 数组，每个条目包含 ``text``、
+    ``chapter``、``datetime``（或 ``timestamp``）、``note``、
+    ``page`` 等键。
     """
     try:
         data = json.loads(raw_json)
     except json.JSONDecodeError as exc:
-        sys.stderr.write(f"[sync] Invalid JSON: {exc}\n")
+        sys.stderr.write(f"[sync] 无效的 JSON: {exc}\n")
         return []
 
     if not isinstance(data, list):
-        # Sometimes KOReader wraps highlights in an object keyed by page
+        # 有时 KOReader 将摘录包装在按页码索引的对象中
         if isinstance(data, dict):
             data = data.get("highlight", data.get("highlights", []))
             if not isinstance(data, list):
                 sys.stderr.write(
-                    "[sync] Unexpected JSON structure; expected a list.\n"
+                    "[sync] 意外的 JSON 结构；预期为列表。\n"
                 )
                 return []
 
@@ -254,7 +253,7 @@ def parse_highlights(raw_json: str) -> List[Dict[str, Any]]:
         if not isinstance(entry, dict):
             continue
         if not entry.get("text"):
-            continue  # skip entries with no highlight text
+            continue  # 跳过没有摘录文本的条目
 
         ts = entry.get("datetime") or entry.get("timestamp") or ""
         results.append({
@@ -268,7 +267,7 @@ def parse_highlights(raw_json: str) -> List[Dict[str, Any]]:
 
 
 def deduplicate(highlights: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Remove highlight entries with identical ``text`` and ``chapter``."""
+    """移除 ``text`` 和 ``chapter`` 完全相同的重复摘录条目。"""
     seen: set = set()
     unique: List[Dict[str, Any]] = []
     for h in highlights:
@@ -284,30 +283,30 @@ def deduplicate(highlights: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 def group_by_chapter(
     highlights: List[Dict[str, Any]],
 ) -> Dict[str, List[Dict[str, Any]]]:
-    """Group highlights by their ``chapter`` field.
+    """按 ``chapter`` 字段对摘录进行分组。
 
-    Highlights without a chapter go into a key ``(unlabelled)``.
+    没有章节的摘录归入键 ``(未标注)``。
     """
     groups: Dict[str, List[Dict[str, Any]]] = {}
     for h in highlights:
-        ch = h["chapter"].strip() or "(unlabelled)"
+        ch = h["chapter"].strip() or "(未标注)"
         groups.setdefault(ch, []).append(h)
     return groups
 
 
 # ---------------------------------------------------------------------------
-# Output formatters
+# 输出格式化
 # ---------------------------------------------------------------------------
 
 def _make_yaml_frontmatter(
     meta: Dict[str, str], highlight_count: int
 ) -> str:
-    """Build Obsidian-compatible YAML frontmatter string."""
+    """构建兼容 Obsidian 的 YAML frontmatter 字符串。"""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     lines = [
         "---",
-        f'title: "{meta.get("title", "Untitled")}"',
-        f"author: {meta.get('author', 'Unknown')}",
+        f'title: "{meta.get("title", "未命名")}"',
+        f"author: {meta.get('author', '未知')}",
         f"date: {now}",
         f"highlights: {highlight_count}",
     ]
@@ -323,12 +322,12 @@ def format_markdown(
     highlights: List[Dict[str, Any]],
     meta: Dict[str, str],
 ) -> str:
-    """Render highlights as Obsidian-compatible markdown."""
+    """将摘录渲染为兼容 Obsidian 的 markdown。"""
     groups = group_by_chapter(highlights)
     parts = [_make_yaml_frontmatter(meta, len(highlights))]
 
-    title = meta.get("title", "Untitled")
-    parts.append(f"# {title} — Highlights")
+    title = meta.get("title", "未命名")
+    parts.append(f"# {title} — 摘录")
     parts.append("")
 
     for chapter, items in groups.items():
@@ -337,9 +336,9 @@ def format_markdown(
         for h in items:
             parts.append(f"> {h['text']}")
             if h.get("note"):
-                parts.append(f"  — *Note:* {h['note']}")
+                parts.append(f"  — *笔记:* {h['note']}")
             if h.get("page"):
-                parts.append(f"  — page {h['page']}")
+                parts.append(f"  — 页码 {h['page']}")
             parts.append("")
     return "\n".join(parts)
 
@@ -348,12 +347,12 @@ def format_json_output(
     highlights: List[Dict[str, Any]],
     meta: Dict[str, str],
 ) -> str:
-    """Render highlights as a clean JSON document."""
+    """将摘录渲染为整洁的 JSON 文档。"""
     groups = group_by_chapter(highlights)
     output: Dict[str, Any] = {
         "meta": {
-            "title": meta.get("title", "Untitled"),
-            "author": meta.get("author", "Unknown"),
+            "title": meta.get("title", "未命名"),
+            "author": meta.get("author", "未知"),
         },
         "total_highlights": len(highlights),
         "chapters": {},
@@ -367,15 +366,15 @@ def format_text(
     highlights: List[Dict[str, Any]],
     meta: Dict[str, str],
 ) -> str:
-    """Render highlights as plain text with chapter grouping."""
+    """将摘录渲染为按章节分组的纯文本。"""
     groups = group_by_chapter(highlights)
     lines: List[str] = []
-    title = meta.get("title", "Untitled")
-    author = meta.get("author", "Unknown")
+    title = meta.get("title", "未命名")
+    author = meta.get("author", "未知")
     lines.append(f"{title}")
     if author:
-        lines.append(f"by {author}")
-    lines.append(f"{len(highlights)} highlights")
+        lines.append(f"作者：{author}")
+    lines.append(f"{len(highlights)} 条摘录")
     lines.append("=" * 60)
     lines.append("")
 
@@ -385,27 +384,27 @@ def format_text(
         for h in items:
             lines.append(f"  * {h['text']}")
             if h.get("note"):
-                lines.append(f"    [Note: {h['note']}]")
+                lines.append(f"    [笔记: {h['note']}]")
             if h.get("page"):
-                lines.append(f"    [Page: {h['page']}]")
+                lines.append(f"    [页码: {h['page']}]")
             lines.append("")
     return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
-# Source loading
+# 源加载
 # ---------------------------------------------------------------------------
 
 def load_highlights(source: str) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
-    """Load highlights from *source* (local path or webdav URL).
+    """从 *source*（本地路径或 webdav URL）加载摘录。
 
-    Returns ``(highlights, metadata_dict)``.
+    返回 ``(highlights, metadata_dict)``。
     """
     meta: Dict[str, str] = _guess_metadata_from_path(source)
 
     if _is_webdav(source):
         base, user, password, dirpath = _parse_webdav_url(source)
-        # List files, find JSON highlight files
+        # 列出文件，查找 JSON 摘录文件
         hrefs = _webdav_list(base, user, password, dirpath)
         all_highlights: List[Dict[str, Any]] = []
         for href in hrefs:
@@ -416,16 +415,16 @@ def load_highlights(source: str) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
                 continue
             all_highlights.extend(parse_highlights(raw.decode("utf-8", errors="replace")))
 
-        # Try to read metadata from the remote SDR directory too
+        # 也尝试从远程 SDR 目录读取元数据
         for meta_file in METADATA_FILENAMES:
             raw = _webdav_fetch(base, user, password, dirpath + meta_file)
             if raw is not None:
                 meta.update(_extract_remote_metadata(raw, meta_file))
         return deduplicate(all_highlights), meta
 
-    # --- Local path ---
+    # --- 本地路径 ---
     if os.path.isdir(source):
-        # SDR directory: read the primary JSON highlight file(s)
+        # SDR 目录：读取主要的 JSON 摘录文件
         all_highlights: List[Dict[str, Any]] = []
         sdr_meta = _extract_sdr_metadata(source)
         meta.update(sdr_meta)
@@ -438,24 +437,24 @@ def load_highlights(source: str) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
                 with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
                     all_highlights.extend(parse_highlights(fh.read()))
             except OSError as exc:
-                sys.stderr.write(f"[sync] Cannot read {fpath}: {exc}\n")
+                sys.stderr.write(f"[sync] 无法读取 {fpath}: {exc}\n")
 
-        # Also check parent dir for SDR naming
+        # 也检查父目录的 SDR 命名
         parent_meta = _guess_metadata_from_path(source)
         for k, v in parent_meta.items():
             meta.setdefault(k, v)
 
         return deduplicate(all_highlights), meta
 
-    # Single file
+    # 单个文件
     try:
         with open(source, "r", encoding="utf-8", errors="replace") as fh:
             highlights = parse_highlights(fh.read())
     except OSError as exc:
-        sys.stderr.write(f"[sync] Cannot read {source}: {exc}\n")
+        sys.stderr.write(f"[sync] 无法读取 {source}: {exc}\n")
         return [], meta
 
-    # Try the parent SDR directory for metadata
+    # 尝试从父 SDR 目录读取元数据
     parent = os.path.dirname(source)
     if os.path.isdir(parent):
         sdr_meta = _extract_sdr_metadata(parent)
@@ -468,7 +467,7 @@ def load_highlights(source: str) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
 
 
 def _extract_remote_metadata(raw: bytes, filename: str) -> Dict[str, str]:
-    """Extract metadata from a remotely-fetched metadata file's bytes."""
+    """从远程获取的元数据文件字节中提取元数据。"""
     meta: Dict[str, str] = {}
     text = raw.decode("utf-8", errors="replace")
 
@@ -497,7 +496,7 @@ def _extract_remote_metadata(raw: bytes, filename: str) -> Dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Main orchestration
+# 主流程编排
 # ---------------------------------------------------------------------------
 
 def sync_highlights(
@@ -505,19 +504,19 @@ def sync_highlights(
     output_format: str = "json",
     output_dir: Optional[str] = None,
 ) -> int:
-    """Load, process, and output highlights.
+    """加载、处理并输出摘录。
 
-    Returns 0 on success, non-zero on failure.
+    成功返回 0，失败返回非零。
     """
     highlights, meta = load_highlights(source)
 
     if not highlights:
-        sys.stderr.write("[sync] No highlights found.\n")
+        sys.stderr.write("[sync] 未找到摘录。\n")
         return 1
 
     meta.setdefault("book_filename", os.path.basename(source.rstrip("/\\")))
 
-    # Render
+    # 渲染
     formatters: Dict[str, Callable[[List[Dict[str, Any]], Dict[str, str]], str]] = {
         "json": format_json_output,
         "markdown": format_markdown,
@@ -526,7 +525,7 @@ def sync_highlights(
     formatter = formatters.get(output_format, format_json_output)
     output_text = formatter(highlights, meta)
 
-    # Extension mapping
+    # 扩展名映射
     ext_map = {"json": ".json", "markdown": ".md", "text": ".txt"}
     ext = ext_map.get(output_format, ".json")
 
@@ -540,9 +539,9 @@ def sync_highlights(
         try:
             with open(out_path, "w", encoding="utf-8") as fh:
                 fh.write(output_text)
-            sys.stderr.write(f"[sync] Written: {out_path}\n")
+            sys.stderr.write(f"[sync] 已写入: {out_path}\n")
         except OSError as exc:
-            sys.stderr.write(f"[sync] Cannot write {out_path}: {exc}\n")
+            sys.stderr.write(f"[sync] 无法写入 {out_path}: {exc}\n")
             return 1
     else:
         sys.stdout.write(output_text)
@@ -556,10 +555,10 @@ def sync_highlights(
 
 def main(argv: Optional[List[str]] = None) -> None:
     parser = argparse.ArgumentParser(
-        description="KOReader highlight synchronisation tool.",
+        description="KOReader 摘录同步工具。",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
+示例:
   python sync_highlights.py --source /path/to/highlights.json
   python sync_highlights.py --source /path/to/book_sdr/ --output markdown
   python sync_highlights.py --source webdav://user:pass@host/koreader/highlights/
@@ -570,26 +569,26 @@ Examples:
     parser.add_argument(
         "--source", required=True,
         help=(
-            "Path to a KOReader highlight JSON file, an SDR directory, or a "
-            "webdav:// URL pointing to a remote highlights directory."
+            "KOReader 摘录 JSON 文件、SDR 目录或指向"
+            "远程摘录目录的 webdav:// URL 的路径。"
         ),
     )
     parser.add_argument(
         "--output", choices=["json", "markdown", "text"], default="json",
-        help="Output format. 'markdown' includes Obsidian YAML frontmatter.",
+        help="输出格式。'markdown' 包含 Obsidian YAML frontmatter。",
     )
     parser.add_argument(
         "--output-dir", metavar="DIR",
         help=(
-            "Directory to write the output file into. "
-            "If omitted, output is printed to stdout."
+            "输出文件写入的目录。"
+            "如果省略，输出打印到 stdout。"
         ),
     )
     parser.add_argument(
         "--watch", type=int, default=0, metavar="SECONDS",
         help=(
-            "Poll the source every N seconds for new highlights. "
-            "Useful for continuous sync."
+            "每隔 N 秒轮询源以获取新摘录。"
+            "适用于持续同步。"
         ),
     )
 
@@ -597,8 +596,8 @@ Examples:
 
     if args.watch > 0:
         sys.stderr.write(
-            f"[sync] Watching {args.source} every {args.watch}s. "
-            "Press Ctrl+C to stop.\n"
+            f"[sync] 正在监视 {args.source}，间隔 {args.watch} 秒。"
+            "按 Ctrl+C 停止。\n"
         )
         try:
             while True:
@@ -609,12 +608,12 @@ Examples:
                 )
                 if exit_code != 0:
                     sys.stderr.write(
-                        f"[sync] Sync returned exit code {exit_code}. "
-                        "Will retry on next poll.\n"
+                        f"[sync] 同步返回退出码 {exit_code}。"
+                        "将在下次轮询时重试。\n"
                     )
                 time.sleep(args.watch)
         except KeyboardInterrupt:
-            sys.stderr.write("\n[sync] Watch stopped.\n")
+            sys.stderr.write("\n[sync] 监视已停止。\n")
             sys.exit(0)
     else:
         sys.exit(sync_highlights(

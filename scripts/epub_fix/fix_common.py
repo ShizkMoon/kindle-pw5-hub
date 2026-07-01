@@ -1,24 +1,22 @@
 #!/usr/bin/env python3
 """
-Fix common EPUB structural issues using ebooklib.
+使用 ebooklib 修复 EPUB 常见的结构性问题。
 
-Repairs three categories of problems often found in EPUBs generated or
-post-processed by conversion tools (Calibre, Sigil, etc.):
+修复三类在转换工具（Calibre、Sigil 等）生成或后处理的 EPUB 中常见的问题：
 
-    manifest  -- Add missing OPF manifest entries for files actually present
-                 in the archive; remove manifest entries that point to
-                 non-existent files.
-    date      -- Ensure the Dublin Core <dc:date> field is valid YYYY-MM-DD
-                 and repair common invalid formats.
-    css       -- Strip renderer-unfriendly CSS: absolute px font-sizes,
-                 "!important" on body text, and line-height values < 1.0.
+    manifest -- 为实际存在于归档中的文件添加缺失的 OPF manifest 条目；
+                移除指向不存在文件的 manifest 条目。
+    date     -- 确保 Dublin Core <dc:date> 字段为有效的 YYYY-MM-DD 格式，
+                并修复常见的无效格式。
+    css      -- 去除对阅读器不友好的 CSS：绝对 px 字号、
+                正文中的 "!important"、以及小于 1.0 的 line-height 值。
 
-Usage:
+用法：
     python fix_common.py book.epub --fix all
     python fix_common.py book.epub --fix manifest --fix date --dry-run
     python fix_common.py book.epub --fix css --in-place
 
-Requires:
+依赖：
     ebooklib  (pip install ebooklib)
 """
 
@@ -40,7 +38,7 @@ _EBOOKLIB_AVAILABLE = False
 
 
 def _ensure_ebooklib():
-    """Lazy-import ebooklib and raise a helpful error if unavailable."""
+    """延迟导入 ebooklib，若不可用则抛出有帮助的错误信息。"""
     global _EBOOKLIB_AVAILABLE
     if _EBOOKLIB_AVAILABLE:
         return
@@ -50,9 +48,9 @@ def _ensure_ebooklib():
         _EBOOKLIB_AVAILABLE = True
     except ImportError:
         print(
-            "Error: ebooklib is not installed.\n\n"
-            "This script requires the ebooklib library.\n"
-            "Install it with:  pip install ebooklib",
+            "错误: 未安装 ebooklib 库。\n\n"
+            "此脚本需要 ebooklib 库。\n"
+            "安装方法:  pip install ebooklib",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -63,7 +61,7 @@ def _ensure_ebooklib():
 # ---------------------------------------------------------------------------
 
 class Change(NamedTuple):
-    """A single fix applied (or proposed)."""
+    """单次已应用的（或拟应用的）修复。"""
     file: str           # logical file or category (e.g. "OPF manifest")
     description: str    # human-readable description
 
@@ -74,12 +72,12 @@ DRY_RUN = False
 
 
 def _normalise_epub_path(path: str) -> str:
-    """Normalise a path as stored inside an EPUB zip for comparison."""
+    """将路径规范化为 EPUB 压缩包内的存储格式，用于比较。"""
     return path.replace("\\", "/").lstrip("/")
 
 
 def _get_zip_entries(epub_path: str) -> set[str]:
-    """Return the set of normalised file paths inside an EPUB archive."""
+    """返回 EPUB 归档内所有规范化文件路径的集合。"""
     entries: set[str] = set()
     with zipfile.ZipFile(epub_path, "r") as zf:
         for info in zf.infolist():
@@ -90,7 +88,7 @@ def _get_zip_entries(epub_path: str) -> set[str]:
 
 
 def _read_zip_bytes(epub_path: str, normalised_path: str) -> bytes | None:
-    """Read the raw bytes for a normalised path from the EPUB zip."""
+    """从 EPUB 压缩包中读取指定规范化路径的原始字节。"""
     with zipfile.ZipFile(epub_path, "r") as zf:
         for info in zf.infolist():
             if info.is_dir():
@@ -101,7 +99,7 @@ def _read_zip_bytes(epub_path: str, normalised_path: str) -> bytes | None:
 
 
 def _guess_media_type(file_name: str) -> str:
-    """Guess a media (MIME) type from a file extension."""
+    """根据文件扩展名推测媒体（MIME）类型。"""
     ext = os.path.splitext(file_name)[1].lower()
     mapping: dict[str, str] = {
         ".xhtml": "application/xhtml+xml",
@@ -136,7 +134,7 @@ def _guess_media_type(file_name: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _make_unique_item_id(candidate: str, taken: set[str]) -> str:
-    """Return a unique OPF item id, appending a suffix if needed."""
+    """返回唯一的 OPF item id，必要时追加后缀。"""
     if candidate not in taken:
         taken.add(candidate)
         return candidate
@@ -150,14 +148,14 @@ def _make_unique_item_id(candidate: str, taken: set[str]) -> str:
 
 
 def _files_to_skip() -> set[str]:
-    """Files that are never manifest items."""
+    """永远不会成为 manifest 条目的文件。"""
     return {"mimetype", "META-INF/container.xml"}
 
 
 def _fix_manifest(book, epub_path: str) -> list[Change]:
     """
-    (a) Add missing OPF manifest entries for files present in the zip.
-    (b) Remove manifest entries referencing files that do not exist in the zip.
+    (a) 为压缩包中存在但 manifest 缺失的文件添加 OPF manifest 条目。
+    (b) 移除引用了压缩包中不存在文件的 manifest 条目。
     """
     from ebooklib import epub as _epub
 
@@ -220,7 +218,7 @@ def _fix_manifest(book, epub_path: str) -> list[Change]:
         if DRY_RUN:
             changes.append(Change(
                 file="OPF manifest",
-                description=f"ADD missing entry: {zip_path} ({media_type})"
+                description=f"添加缺失条目: {zip_path} ({media_type})"
             ))
             continue
 
@@ -238,7 +236,7 @@ def _fix_manifest(book, epub_path: str) -> list[Change]:
         book.add_item(new_item)
         changes.append(Change(
             file="OPF manifest",
-            description=f"ADD: {zip_path} ({media_type})"
+            description=f"添加: {zip_path} ({media_type})"
         ))
 
     # ── (b) Remove dead entries ──
@@ -264,7 +262,7 @@ def _fix_manifest(book, epub_path: str) -> list[Change]:
         if DRY_RUN:
             changes.append(Change(
                 file="OPF manifest",
-                description=f"REMOVE dead entry: {href} (file not in archive)"
+                description=f"移除无效条目: {href}（文件在归档中不存在）"
             ))
             continue
 
@@ -292,7 +290,7 @@ def _fix_manifest(book, epub_path: str) -> list[Change]:
 
         changes.append(Change(
             file="OPF manifest",
-            description=f"REMOVE: {href} (file not found in archive)"
+            description=f"移除: {href}（文件在归档中未找到）"
         ))
 
     return changes
@@ -303,16 +301,16 @@ def _fix_manifest(book, epub_path: str) -> list[Change]:
 # ---------------------------------------------------------------------------
 
 def _date_is_valid(date_str: str) -> bool:
-    """Check whether *date_str* is already valid YYYY-MM-DD."""
+    """检查 *date_str* 是否已为有效的 YYYY-MM-DD 格式。"""
     return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_str.strip())) and \
         _parse_date(date_str.strip()) is not None
 
 
 def _parse_date(date_str: str) -> str | None:
     """
-    Attempt to parse any common date string into canonical YYYY-MM-DD.
+    尝试将任意常见日期字符串解析为规范的 YYYY-MM-DD 格式。
 
-    Returns None if parsing fails entirely.
+    若完全无法解析则返回 None。
     """
     date_str = date_str.strip()
     if not date_str:
@@ -393,7 +391,7 @@ def _parse_date(date_str: str) -> str | None:
 
 
 def _fix_date(book) -> list[Change]:
-    """Ensure DC date metadata fields are valid YYYY-MM-DD."""
+    """确保 DC 日期元数据字段为有效的 YYYY-MM-DD 格式。"""
     changes: list[Change] = []
 
     # ebooklib stores metadata as a list of (namespace, name, value, attrs)
@@ -420,14 +418,14 @@ def _fix_date(book) -> list[Change]:
         if not canonical:
             changes.append(Change(
                 file="OPF metadata",
-                description=f"date: UNPARSABLE '{original}' -- left unchanged"
+                description=f"日期: 无法解析 '{original}' -- 保持原样"
             ))
             continue
 
         if DRY_RUN:
             changes.append(Change(
                 file="OPF metadata",
-                description=f"date: '{original}' -> '{canonical}'"
+                description=f"日期: '{original}' -> '{canonical}'"
             ))
             continue
 
@@ -452,7 +450,7 @@ def _fix_date(book) -> list[Change]:
 
         changes.append(Change(
             file="OPF metadata",
-            description=f"date: '{original}' -> '{canonical}'"
+            description=f"日期: '{original}' -> '{canonical}'"
         ))
 
     return changes
@@ -492,7 +490,7 @@ _IMPORTANT_TOKEN_RE = re.compile(r"\s*!important", re.IGNORECASE)
 
 
 def _is_body_text_selector(selector_text: str) -> bool:
-    """Return True if the last simple selector targets running text."""
+    """如果最后一个简单选择器针对正文文本，则返回 True。"""
     parts = [s.strip() for s in selector_text.split(",")]
     for part in parts:
         # Extract the last simple selector (rightmost before any combinator)
@@ -504,7 +502,7 @@ def _is_body_text_selector(selector_text: str) -> bool:
 
 def _fix_css_item(content: str, item_name: str) -> tuple[str, list[str]]:
     """
-    Process a single CSS string.  Returns (new_content, changelist).
+    处理单个 CSS 字符串。返回 (new_content, changelist)。
     """
     changelist: list[str] = []
 
@@ -560,8 +558,8 @@ def _fix_css_item(content: str, item_name: str) -> tuple[str, list[str]]:
                 matched = m_px.group(0).strip().rstrip(";")
                 output_lines.append(f"  /* EPUBFIX: removed '{matched}' */\n")
                 changelist.append(
-                    f"  {item_name}: removed absolute px font-size "
-                    f"('{m_px.group(1).strip()}' in "
+                    f"  {item_name}: 去除绝对 px 字号 "
+                    f"('{m_px.group(1).strip()}'，位于 "
                     f"'{current_selector[:50]}')"
                 )
                 i += 1
@@ -573,8 +571,8 @@ def _fix_css_item(content: str, item_name: str) -> tuple[str, list[str]]:
                 matched = m_lh.group(0).strip().rstrip(";")
                 output_lines.append(f"  /* EPUBFIX: removed '{matched}' */\n")
                 changelist.append(
-                    f"  {item_name}: removed low line-height "
-                    f"('{m_lh.group(0).strip().rstrip(';')}' in "
+                    f"  {item_name}: 去除过低的 line-height "
+                    f"('{m_lh.group(0).strip().rstrip(';')}'，位于 "
                     f"'{current_selector[:50]}')"
                 )
                 i += 1
@@ -586,8 +584,8 @@ def _fix_css_item(content: str, item_name: str) -> tuple[str, list[str]]:
                 output_lines.append(new_line)
                 short_sel = current_selector[:60]
                 changelist.append(
-                    f"  {item_name}: stripped !important from "
-                    f"'{short_sel}'"
+                    f"  {item_name}: 从 "
+                    f"'{short_sel}' 中去除 !important"
                 )
                 i += 1
                 continue
@@ -600,7 +598,7 @@ def _fix_css_item(content: str, item_name: str) -> tuple[str, list[str]]:
 
 
 def _fix_css(book, epub_path: str) -> list[Change]:
-    """Fix CSS issues in all stylesheet items."""
+    """修复所有样式表条目中的 CSS 问题。"""
     from ebooklib import ITEM_STYLE
 
     changes: list[Change] = []
@@ -642,7 +640,7 @@ FIX_REGISTRY = {
 
 
 def _output_path(input_path: str, in_place: bool) -> str:
-    """Return the path where the fixed EPUB should be saved."""
+    """返回修复后的 EPUB 应保存的路径。"""
     if in_place:
         return input_path
     base, ext = os.path.splitext(input_path)
@@ -655,17 +653,17 @@ def main(argv: list[str] | None = None) -> None:
     global DRY_RUN
 
     parser = argparse.ArgumentParser(
-        description="Fix common EPUB structural issues.",
+        description="修复 EPUB 常见的结构性问题。",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Fix types:
-  manifest   Add missing or remove dead OPF manifest entries
-  date       Repair invalid DC date fields to YYYY-MM-DD
-  css        Strip renderer-unfriendly CSS (px font-size,
-             !important on body text, line-height < 1.0)
-  all        Apply all fixes above
+修复类型：
+  manifest   添加缺失或移除无效的 OPF manifest 条目
+  date       修复无效的 DC 日期字段为 YYYY-MM-DD 格式
+  css        去除对阅读器不友好的 CSS（px 字号、
+             正文中的 !important、line-height < 1.0）
+  all        应用上述所有修复
 
-Examples:
+示例：
   python fix_common.py book.epub --fix all --dry-run
   python fix_common.py book.epub --fix manifest --fix date
   python fix_common.py book.epub --fix css --in-place
@@ -673,38 +671,37 @@ Examples:
     )
     parser.add_argument(
         "epub",
-        help="Path to the EPUB file to fix",
+        help="要修复的 EPUB 文件路径",
     )
     parser.add_argument(
         "--fix",
         action="append",
         dest="fixes",
         choices=["manifest", "date", "css", "all"],
-        help="Fix type to apply (repeatable; 'all' applies every fix)",
+        help="要应用的修复类型（可重复指定；'all' 表示应用全部修复）",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Show what would change without writing any files",
+        help="仅显示将要修改的内容，不写入任何文件",
     )
     parser.add_argument(
         "--in-place",
         action="store_true",
-        help="Overwrite the original EPUB instead of creating *_fixed.epub",
+        help="直接覆盖原始 EPUB，而非创建 *_fixed.epub 副本",
     )
     args = parser.parse_args(argv)
 
     # ── validation ──────────────────────────────────────────────────────
     if not args.fixes:
         print(
-            "Error: no fix type specified. "
-            "Use --fix manifest, --fix date, --fix css, or --fix all.",
+            "错误: 未指定修复类型。请使用 --fix manifest、--fix date、--fix css 或 --fix all。",
             file=sys.stderr,
         )
         sys.exit(2)
 
     if not os.path.isfile(args.epub):
-        print(f"Error: EPUB file not found: {args.epub}", file=sys.stderr)
+        print(f"错误: 未找到 EPUB 文件: {args.epub}", file=sys.stderr)
         sys.exit(2)
 
     DRY_RUN = args.dry_run
@@ -724,17 +721,16 @@ Examples:
         book = _epub.read_epub(args.epub)
     except KeyError as exc:
         print(
-            f"Error: Failed to read EPUB (missing internal file): {exc}",
+            f"错误: 读取 EPUB 失败（缺少内部文件）: {exc}",
             file=sys.stderr,
         )
         print(
-            "The manifest may reference files not in the archive. "
-            "Try running with --fix manifest or repair the EPUB manually.",
+            "manifest 可能引用了归档中不存在的文件。请尝试使用 --fix manifest 运行，或手动修复此 EPUB。",
             file=sys.stderr,
         )
         sys.exit(2)
     except Exception as exc:
-        print(f"Error: Failed to read EPUB: {exc}", file=sys.stderr)
+        print(f"错误: 读取 EPUB 失败: {exc}", file=sys.stderr)
         sys.exit(2)
 
     # ── apply ───────────────────────────────────────────────────────────
@@ -746,16 +742,16 @@ Examples:
 
         label = f"[{fix_name}]".ljust(14)
         fn = FIX_REGISTRY[fix_name]
-        print(f"{label} Scanning ...")
+        print(f"{label} 正在扫描 ...")
         results = fn(book, args.epub)
         all_changes.extend(results)
 
         if results:
             for c in results:
                 print(f"  {c.description}")
-            print(f"  -> {len(results)} change(s)")
+            print(f"  -> {len(results)} 处变更")
         else:
-            print(f"  No issues found.")
+            print(f"  未发现问题。")
         print()
 
     # ── save ────────────────────────────────────────────────────────────
@@ -764,22 +760,22 @@ Examples:
     if DRY_RUN:
         print("=" * 60)
         if all_changes:
-            print(f"DRY RUN: {len(all_changes)} change(s) would be applied.")
+            print(f"试运行: 将应用 {len(all_changes)} 处变更。")
         else:
-            print("DRY RUN: no changes needed.")
-        print(f"Output would be: {out}")
+            print("试运行: 无需任何变更。")
+        print(f"输出文件将为: {out}")
     elif all_changes:
         print("=" * 60)
         try:
             _epub.write_epub(out, book)
         except Exception as exc:
-            print(f"Error: Failed to write EPUB: {exc}", file=sys.stderr)
+            print(f"错误: 写入 EPUB 失败: {exc}", file=sys.stderr)
             sys.exit(2)
-        print(f"Fixed EPUB written to: {out}")
-        print(f"Total changes applied: {len(all_changes)}")
+        print(f"修复后的 EPUB 已写入: {out}")
+        print(f"共应用 {len(all_changes)} 处变更")
     else:
         print("=" * 60)
-        print("No changes needed -- EPUB is already clean.")
+        print("无需修复 -- EPUB 已是干净状态。")
 
     sys.exit(0)
 
