@@ -19,6 +19,7 @@ KPW5（第 11 代）优化与自动化管理知识库。
 - [完整最佳实践指南](docs/guide.md) —— 从开箱设置到越狱 KOReader
 - [Calibre 自动化方案](docs/calibre-automation.md) —— Agent 操控 Calibre 的接口与工作流
 - [格式速查表](docs/format-cheatsheet.md) —— 格式选型、转换参数、推送对比
+- [AI 集成方案蓝图](docs/ai-integration-blueprint.md) —— 将 KPW5 纳入 dorm-workstation 多模型多 Agent 体系的全景设计
 
 ## 目录结构
 
@@ -26,10 +27,11 @@ KPW5（第 11 代）优化与自动化管理知识库。
 kindle-pw5-hub/
 ├── README.md
 ├── docs/
-│   ├── guide.md              # 完整优化指南
-│   ├── calibre-automation.md # Calibre + Agent 集成方案
-│   └── format-cheatsheet.md  # 格式与转换速查
-└── scripts/                  # 自动化脚本（待实现）
+│   ├── guide.md                  # 完整优化指南
+│   ├── calibre-automation.md     # Calibre + Agent 集成方案
+│   ├── format-cheatsheet.md      # 格式与转换速查
+│   └── ai-integration-blueprint.md  # AI 集成蓝图（× dorm-workstation）
+└── scripts/                      # 自动化脚本（待实现）
 ```
 
 ## 快速决策
