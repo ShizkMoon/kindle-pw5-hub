@@ -108,75 +108,82 @@ calibremcp
 
 #### 2.2 EPUB 格式自动化处理
 
-只保留两种格式：**EPUB（主） + KFX（副）**。EPUB 是唯一可编辑的源格式，所有处理在 EPUB 上完成。
+**KOReader 只读 EPUB**——KFX 无用。全链路统一为 EPUB：**任何输入格式 → EPUB → KOReader**。
+
+##### 输入格式覆盖
+
+| 输入格式 | 转换工具 | 典型场景 |
+|---|---|---|
+| **EPUB** (已有) | EPUBCheck → ebooklib 修复 | 下载/购买的成品电子书 |
+| **TXT** (质量差) | ebook-convert 启发式处理 + Agent 后处理 | 网文、自整理文本 |
+| **MOBI / AZW3** | ebook-convert → EPUB | 旧 Kindle 格式迁移 |
+| **PDF** (文字型) | ebook-convert / KOReader 原生重排 | 论文、教材 |
+| **PDF** (扫描版) | OCR → EPUB | 扫描书（低频，人工处理为主） |
+| **HTML / DOCX** | ebook-convert → EPUB | 网页文章、Word 文档 |
 
 ##### 工具矩阵
 
 | 工具 | 类型 | 运行位置 | 可信度 |
 |---|---|---|---|
+| **Calibre `ebook-convert`** | CLI | ☁️ 云服务器 / 💻 Windows | ⭐⭐⭐⭐⭐ |
 | **EPUBCheck** | Java CLI (W3C 官方) | ☁️ 云服务器 / 💻 Windows | ⭐⭐⭐⭐⭐ |
 | **ebooklib** | Python 库 | ☁️ 云服务器 / 💻 Windows | ⭐⭐⭐⭐⭐ |
-| **Calibre `ebook-convert`** | CLI | ☁️ 云服务器 / 💻 Windows | ⭐⭐⭐⭐⭐ |
-| **Calibre KFX Output 插件** | Calibre 插件 → 调 Kindle Previewer 3 | 💻 Windows only | ⭐⭐⭐⭐ (46K+ 下载) |
-| **Sigil Automate Lists** | GUI 内建批量操作链 | 💻 Windows (需 GUI) | ⭐⭐⭐⭐⭐ (官方) |
-| ~~sigil-cli~~ | ❌ 非官方个人项目 (2★, 2021 停更) | — | 不可用 |
+| **Sigil Automate Lists** | GUI 批量操作链 | 💻 Windows only | ⭐⭐⭐⭐⭐ (官方) |
 
 ##### 各工具职责
 
 ```
-EPUB 处理流水线:
-
-[1] ebook-convert EPUB → EPUB
-    作用: 标准化编码、移除内嵌垃圾样式、统一基础参数
+[1] ebook-convert → EPUB 标准化
+    任何输入 → EPUB。统一编码 UTF-8、移除垃圾样式、基础排版
     运行: ☁️ 云服务器 或 💻 Windows
-    命令: ebook-convert input.epub normalized.epub
-          --output-profile generic_eink_hd
-          --remove-paragraph-spacing
+    命令: ebook-convert input.xxx output.epub [参数]
 
-[2] EPUBCheck
-    作用: W3C 标准 EPUB 验证，检测格式错误
+[2] EPUBCheck → 验证
+    W3C 标准 EPUB 验证，检测格式错误
     运行: ☁️ 云服务器 或 💻 Windows
-    命令: java -jar epubcheck.jar book.epub
 
-[3] ebooklib (Python 脚本)
-    作用: 程序化修复——移除冗余 CSS、补全 OPF manifest、
-          修复断链、统一字体引用、清理行内样式
+[3] ebooklib → 程序化修复
+    移除冗余 CSS、补全 OPF manifest、修复断链、统一字体引用
     运行: ☁️ 云服务器 或 💻 Windows
-    特点: 纯 CLI，Agent 可生成修复脚本直接执行
 
-[4] Sigil Automate Lists (仅在需要人工判断时使用)
-    作用: 串联多个 Sigil 插件 → 一键执行复杂修复序列
+[4] Sigil Automate Lists → 深度修复 (GUI)
+    CSS 深度清理、ToC 重建、结构重组等需要 GUI 预览的操作
     运行: 💻 Windows GUI only
-    场景: CSS 深度清理、ToC 重建、结构重组等需要 GUI 预览的操作
-    配置: Sigil 2.7+ → Preferences → 启用 Automation 菜单 → 
-          定义 Automate List → 绑定到工具栏按钮
 ```
 
-##### 云服务器 vs Windows 分工
+##### TXT（低质量网文）→ EPUB 专项处理
 
-| 处理阶段 | 推荐位置 | 原因 |
-|---|---|---|
-| 元数据抓取 + AI 补全 | ☁️ 云服务器优先 | 需要外部网络，Calibre CLI 完全支持 |
-| EPUB 标准化 (ebook-convert) | ☁️ 云服务器 / 💻 | 轻量 CPU 任务，哪里都行 |
-| EPUBCheck 验证 | ☁️ 云服务器 / 💻 | Java CLI，跨平台 |
-| AI CSS 审查 + 修复脚本生成 | ☁️ 云服务器 | Agent 运行在云端，直接操作文件 |
-| Sigil Automate List 执行 | 💻 Windows | GUI 必需，无 headless 替代 |
-| **KFX 生成** | **💻 Windows only** | Kindle Previewer 3 只有 Windows/macOS 版 |
-
-##### KFX 生成的硬约束
-
-KFX Output 插件的实际工作方式：
+网文 TXT 的典型问题：无章节结构、编码混乱、多余换行、无元数据、无封面。
 
 ```
-EPUB → Calibre KFX Output 插件 → Kindle Previewer 3 (GUI 程序) → KPF → KFX
+[1] 编码检测与标准化
+    Agent 检测文件编码 → 统一转换为 UTF-8
+
+[2] 章节结构识别 (Agent + 规则引擎)
+    ├── 正则匹配: 第X章、Chapter X、Volume X 等模式
+    ├── AI 辅助: 规则失败时，Agent 分析文本结构推断章节边界
+    └── 生成 ToC → 写入 EPUB spine
+
+[3] 排版清理
+    ├── 移除多余空行/换行
+    ├── 统一段落缩进
+    ├── 修复半角全角混排
+    └── 可选: 繁简转换 (OpenCC)
+
+[4] 元数据生成
+    ├── 书名: 从文件名或正文首行提取
+    ├── 作者: 从文件名或正文提取
+    └── Agent 调元数据管线 → 自动补全
+
+[5] EPUB 组装
+    ebook-convert cleaned.txt output.epub
+    --formatting-type heuristic
+    --chapter-mark pagebreak
+    --level1-toc //h:h1
+    --base-font-size 12
 ```
 
-- Kindle Previewer 3 是 Amazon 的**官方桌面 GUI 程序**，不是 CLI 工具
-- 没有 Linux 版（Wine 可以跑但不稳定，有 Docker 方案 `yshalsager/calibre-with-kfx` 但同样是 Wine 封装）
-- 转换慢：一本小说约 48 秒（比 MOBI/AZW3 慢 10 倍）
-- **关键判断**：KOReader 原生完美支持 EPUB，KFX 只是获得增强排版（连字符、页翻转等 KOReader 本身不依赖的特性）
-
-> **建议**：日常以 EPUB 为主格式，KOReader 直接阅读。KFX 作为归档/备选，只在需要原生系统阅读时才生成。
+> **云服务器 vs Windows**：TXT→EPUB 全流程可在 ☁️ 云服务器上完成（CLI + Python 脚本），无需 Windows GUI。完成后通过 WebDAV 直接推送到 KOReader。
 
 ### 第 3 层：AI 增强（Agent 自动处理）
 
@@ -300,16 +307,13 @@ Agent (Claude Code via MCP)
    ├── 轻度问题 → ebooklib Python 脚本自动修复 (☁️/💻)
    └── 复杂问题 → Sigil Automate List 手工触发 (💻 GUI only)
        │
-7. Calibre 入库 (EPUB 为主格式)
+7. Calibre 入库 (EPUB 唯一格式)
        │
-8. 可选: EPUB → KFX (Kindle Previewer 3, 💻 Windows only)
-   └── 仅 KOReader 不可用或需原生系统阅读时才生成
-       │
-9. 推送到 Kindle
+8. 推送到 Kindle
    ├── EPUB → WebDAV 上传 → KOReader Cloud Storage 下载 (Wi-Fi)
    └── 或 USB 拷贝到 documents/
        │
-10. Agent 通知: "《XXX》已入库并推送至 Kindle ✓"
+9. Agent 通知: "《XXX》已入库并推送至 Kindle ✓"
     (Hermes 可通过 WeChat 通知)
 ```
 
@@ -513,8 +517,6 @@ KOReader 端配置 Cloud Storage → WebDAV：
 - [EPUBCheck (W3C 官方 EPUB 验证器)](https://github.com/w3c/epubcheck)
 - [ebooklib (Python EPUB 库)](https://github.com/aerkalov/ebooklib)
 - [calibremcp (sandraschi)](https://github.com/sandraschi/calibremcp)
-- [KFX Output 插件 (Calibre 官方插件索引)](https://www.mobileread.com/forums/showthread.php?t=272407) — 46K+ 下载，需 Kindle Previewer 3
-- [Docker KFX (yshalsager/calibre-with-kfx)](https://github.com/yshalsager/calibre-with-kfx) — Wine 方案，不推荐生产使用
 - [Syncery.koplugin](https://github.com/d0nizam/syncery.koplugin)
 - [HighlightSync.koplugin](https://github.com/KarimMoustamid/highlightsync.koplugin)
 - [KOSyncthing+](https://github.com/d0nizam/kosyncthing_plus.koplugin)
