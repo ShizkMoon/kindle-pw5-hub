@@ -1,0 +1,18 @@
+# Calibre
+*.db
+metadata_db_prefs_backup.json
+
+# OS
+Thumbs.db
+.DS_Store
+Desktop.ini
+
+# Temp
+*.tmp
+*.log
+~$*
+
+# Python
+__pycache__/
+*.pyc
+.venv/
