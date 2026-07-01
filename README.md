@@ -37,6 +37,7 @@
 | [MCP 规格](docs/mcp-specs.md) | 3 组 MCP Server 完整工具定义与接口说明 |
 | [阅读在日常节律中的位置](docs/daily-reading-rhythm.md) | Kindle × AI 管线在一天 24 小时里的实际体验 |
 | [选购建议](docs/buying-guide.md) | KPW5 vs KPW6 vs Kobo Clara BW——已持有 KPW5 的前提下是否值得升级 |
+| [Apple 兼容性](docs/apple-compatibility.md) | 未来购入 iPhone/iPad/Mac 时现有基础设施的兼容性评估 |
 
 ## AI 管线工作流
 
