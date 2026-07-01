@@ -27,6 +27,7 @@
 | [EPUB 处理管线](docs/pipeline.md) | 处理标准：输入矩阵、TXT 网文专项、CSS 规范、验证流程 |
 | [Kindle 部署](docs/kindle-setup.md) | 越狱 → KOReader → 插件安装 → 样式配置 |
 | [MCP 规格](docs/mcp-specs.md) | 3 组 MCP Server 完整工具定义与接口说明 |
+| [阅读在日常节律中的位置](docs/daily-reading-rhythm.md) | Kindle × AI 管线在一天 24 小时里的实际体验 |
 
 ## AI 管线工作流
 
