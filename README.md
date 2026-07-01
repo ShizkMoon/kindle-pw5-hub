@@ -3,6 +3,15 @@
 > KPW5 (第 11 代) 越狱后 × AI 智能管线，打造个人最舒适的阅读书务体系。
 > 任意格式进，精排 EPUB 出，KOReader 阅读，AI 自动处理标注。
 
+## 关联项目
+
+本仓库是阅读子系统。工位的物理设计和 AI 基础设施在另外两个仓库：
+
+| 仓库 | 说明 |
+|---|---|
+| [dorm-workstation](https://github.com/ShizkMoon/dorm-workstation) | 物理工位：桌面布局、模块图纸、设备采购 |
+| [ai-workstation](https://github.com/ShizkMoon/ai-workstation) | AI 基础设施：云服务器部署、模型路由、工具链、日常节律 |
+
 ## 核心理念
 
 这不是一个"Kindle 使用指南"——这是一套 **AI 驱动的一人书务自动化工程**。我把一切可以交给机器的环节都交给了机器：格式转换、章节识别、元数据补全、CSS 排版、标注合成。我只负责阅读和思考。
@@ -14,10 +23,9 @@
 | 越狱 | ✅ WinterBreak，KOReader 主力阅读器，原生系统保留备份 |
 | 格式 | **EPUB 唯一**，任何输入格式 → EPUB 标准化 → KOReader |
 | 亚马逊云 | ❌ 不用（无 Whispersync / Send to Kindle） |
-| AI 骨干 | New API 网关 + 5 模型智能路由 (GLM-5.2/4.7, DeepSeek V4, MiniMax M3, Kimi K2.7) |
-| MCP 生态 | calibremcp (21 工具) 已部署；epub-processor / metadata-enricher / koreader-bridge 规划中 |
-| 运行平台 | ☁️ 云服务器 (2C2G Docker) + 💻 Windows 笔记本 |
-| 月费 | ~¥3-4（纯 AI API 调用费，其余全开源） |
+| AI 骨干 | New API 网关 + 5 模型智能路由（详见 [ai-workstation](https://github.com/ShizkMoon/ai-workstation)） |
+| MCP 生态 | calibremcp 已部署；epub-processor / metadata-enricher / koreader-bridge 规划中 |
+| 智能家居 | Home Assistant + Xiaomi 集成 → 米家设备；ESPHome → 墨水屏面板 |
 
 ## 文档
 
@@ -139,8 +147,7 @@ $env:CALIBRE_LIBRARY = "D:\Calibre 书库"  # Calibre 书库路径
 | 设备 | 系统 | 角色 |
 |---|---|---|
 | Kindle PW5 (第 11 代) | KOReader (越狱) | 主力阅读终端 |
-| 云服务器 (2C2G) | Debian + Docker | WebDAV / Calibre CLI / Agent 运行时 |
-| Windows 笔记本 | Windows 11 | Calibre GUI / Sigil / 本地开发 |
+| Kobo Clara BW | KOReader (原生安装) | 外出副机 [📋 计划] |
 
 ## 参考
 
