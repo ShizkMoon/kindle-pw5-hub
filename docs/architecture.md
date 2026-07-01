@@ -13,6 +13,7 @@
 | AI 骨干 | New API 网关 + 多模型智能路由 + MCP 生态 |
 | 运行平台 | ☁️ 云服务器 (2C2G Docker) + 💻 Windows 笔记本 |
 | MCP 服务器 | calibremcp (21 工具) 已部署；epub-processor / metadata-enricher / koreader-bridge 规划中 |
+| 智能家居 | Home Assistant (Docker) + Xiaomi Home 集成 → 米家设备接入；ESPHome → 墨水屏面板 |
 
 ---
 
