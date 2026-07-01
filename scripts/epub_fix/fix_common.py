@@ -695,16 +695,16 @@ Examples:
     args = parser.parse_args(argv)
 
     # ── validation ──────────────────────────────────────────────────────
-    if not os.path.isfile(args.epub):
-        print(f"Error: EPUB file not found: {args.epub}", file=sys.stderr)
-        sys.exit(2)
-
     if not args.fixes:
         print(
             "Error: no fix type specified. "
             "Use --fix manifest, --fix date, --fix css, or --fix all.",
             file=sys.stderr,
         )
+        sys.exit(2)
+
+    if not os.path.isfile(args.epub):
+        print(f"Error: EPUB file not found: {args.epub}", file=sys.stderr)
         sys.exit(2)
 
     DRY_RUN = args.dry_run
