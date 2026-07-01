@@ -1,64 +1,71 @@
 # Kindle Paperwhite 5 Hub
 
-KPW5（第 11 代）优化与自动化管理知识库。
+KPW5（第 11 代）× dorm-workstation AI 体系集成工程。
 
-## 设备
+## 决策
 
-| 项目 | 规格 |
+| 决策 | 状态 |
 |---|---|
-| 屏幕 | 6.8" E Ink Carta 1200, 300 PPI (1072×1448) |
-| 前光 | 17 颗 LED，支持暖光色温 |
-| 接口 | USB-C |
-| 存储 | 8GB / 16GB（Signature 版 32GB） |
-| 电池 | 1700 mAh |
-| 防水 | IPX8 |
-| 型号 | M2L3EK / M2L4EK |
-
-## 架构原则（已确认）
-
-- **Kindle 已越狱**，不使用任何亚马逊云服务（无 Whispersync、无 Send to Kindle、无外部云标注同步）
-- **以 dorm-workstation 的 AI 管线为主**（New API + 5 模型路由 + MCP 生态），Kindle 作为知识摄入终端接入
-- **全链路本地/自建**：WebDAV server → KOReader 同步，Calibre + calibremcp → Agent 书库管理，Sigil → EPUB 自动化
-- **月费 ~¥3-4**（纯 AI API 用量，无限外部服务订阅）
+| 越狱 | ✅ WinterBreak，KOReader 主力，原生系统备份 |
+| 格式 | **EPUB 唯一**，任何输入 → EPUB → KOReader |
+| 亚马逊云 | ❌ 不使用（无 Whispersync / Send to Kindle） |
+| AI 骨干 | New API + 5 模型路由 + MCP |
+| 运行平台 | ☁️ 云服务器 (2C2G) + 💻 Windows 本机 |
+| 月费 | ~¥3-4（纯 AI API） |
 
 ## 文档
 
-- [完整最佳实践指南](docs/guide.md) —— 从开箱设置到越狱 KOReader
-- [自主管线架构方案](docs/local-first-architecture.md) —— **当前采纳方案**：去亚马逊化，本地优先，AI 管线为骨干
-- [高质量处理管线](docs/pipeline-quality.md) —— 基于 EPUB 3.4 / KDP 指南 / KOReader 的排版质量标准
-- [格式速查表](docs/format-cheatsheet.md) —— 格式选型、转换参数、传书对比
-- [Calibre 自动化方案](docs/calibre-automation.md) —— Agent 操控 Calibre 的接口与工作流
-- [AI 集成方案蓝图](docs/ai-integration-blueprint.md) —— KPW5 × dorm-workstation 全景设计（Calibre AI / MCP / 翻译管线）
+| 文档 | 用途 |
+|---|---|
+| [System Architecture](docs/architecture.md) | 系统拓扑、数据流、MCP 矩阵、部署清单 |
+| [EPUB Pipeline](docs/pipeline.md) | 处理管线标准：输入矩阵、TXT 专项、CSS 规范、验证 |
+| [Kindle Setup](docs/kindle-setup.md) | 越狱 → KOReader → 插件 → 配置 |
+| [MCP Specifications](docs/mcp-specs.md) | 3 组 MCP Server 工具定义 |
 
-## 目录结构
+## 脚本
 
 ```
-kindle-pw5-hub/
-├── README.md
-├── docs/
-│   ├── guide.md                        # 完整优化指南
-│   ├── local-first-architecture.md     # ★ 自主管线架构（当前采纳方案）
-│   ├── pipeline-quality.md             # ★ 高质量处理管线（EPUB 排版标准）
-│   ├── format-cheatsheet.md            # 格式与转换速查
-│   ├── calibre-automation.md           # Calibre + Agent 集成方案
-│   └── ai-integration-blueprint.md     # AI 集成蓝图（Calibre AI / MCP / 翻译管线）
-└── scripts/                            # 自动化脚本（待实现）
+scripts/
+├── txt2epub/
+│   └── pipeline.py          TXT → EPUB 全自动管线
+├── epub_fix/
+│   ├── validate.py          EPUBCheck 包装器
+│   └── fix_common.py        常见 EPUB 结构修复
+├── metadata/
+│   └── enrich.py            ISBN 元数据多源查询
+└── koreader_sync/
+    └── sync_highlights.py   KOReader 标注同步 + 导出
 ```
 
-## 快速决策
+## 快速开始
 
-- **传书**：WebDAV / Calibre Wi-Fi / USB。不推送到 Kindle 邮箱
-- **工具**：Calibre + calibremcp (21 MCP 工具) 是 Agent 操作书库的基础
-- **同步**：KOReader Syncery (Syncthing) + HighlightSync (WebDAV)
-- **越狱**：固件 < 5.18.1 用 WinterBreak → 装 KOReader + 全套插件
-- **元数据**：多源 API 查询 + AI 交叉验证 → calibremcp 自动写入
-- **排版修复**：Sigil Automate List + Python 插件 → Agent 驱动批量处理
-- **续航**：飞行模式 + 亮度 8-10
+```powershell
+# TXT → EPUB
+python scripts/txt2epub/pipeline.py novel.txt -t "书名" -a "作者"
 
-## 参考来源
+# EPUB 验证
+python scripts/epub_fix/validate.py book.epub
+
+# 修复常见问题
+python scripts/epub_fix/fix_common.py book.epub --fix all --dry-run
+
+# 元数据查询
+python scripts/metadata/enrich.py --isbn 9787544270878
+```
+
+## 依赖
+
+```
+pip install ebooklib charset-normalizer opencc
+```
+
+Calibre CLI (`ebook-convert`, `calibredb`) 需单独安装：`scoop install calibre`
+
+## 参考
 
 - [书伴 bookfere.com](https://bookfere.com/novice)
-- [KOReader 用户指南](https://koreader.rocks/user_guide/zh_Hans.html)
-- [calibremcp (21-tool MCP Server)](https://github.com/sandraschi/calibremcp)
-- [Sigil Plugin Framework](https://fossies.org/linux/Sigil/docs/Sigil_Plugin_Framework_rev14.epub)
-- [iFixit KPW5 拆解](https://www.ifixit.com/Device/Kindle_Paperwhite_11th_Generation)
+- [KOReader User Guide](https://koreader.rocks/user_guide/)
+- [calibremcp](https://github.com/sandraschi/calibremcp)
+- [EPUBCheck (W3C)](https://github.com/w3c/epubcheck)
+- [Sigil Plugin Framework](https://github.com/Sigil-Ebook/Sigil/blob/master/docs/Sigil_Plugin_Framework_rev15.epub)
+- [iFixit KPW5](https://www.ifixit.com/Device/Kindle_Paperwhite_11th_Generation)
