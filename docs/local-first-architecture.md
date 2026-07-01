@@ -1,7 +1,8 @@
 # KPW5 × AI 自主管线架构方案
 
-> **前提**：Kindle 已越狱，**不使用任何亚马逊云服务**（Whispersync、Send to Kindle、云端标注同步全部不可用）。
+> **前提**：Kindle 已越狱（✅ 已确认），**不使用任何亚马逊云服务**（Whispersync、Send to Kindle、云端标注同步全部不可用）。
 > **原则**：以 dorm-workstation 的 New API + 5 模型路由 + MCP 生态为骨干，Kindle 作为知识摄入硬件终端接入。
+> **阅读器**：KOReader 主力 + Kindle 原生系统保留备用。
 > 这是架构方案，不是实施计划。
 
 ---
@@ -488,7 +489,7 @@ KOReader 端配置 Cloud Storage → WebDAV：
 
 | 优先级 | 项目 | 投入 | 说明 |
 |---|---|---|---|
-| **P0** | KPW5 越狱 + KOReader 安装 | 30 分钟 | 一切的前提 |
+| **P0** | KPW5 越狱 + KOReader 安装 | 30 分钟 | ✅ 已确认，WinterBreak 方案 |
 | **P0** | Calibre + calibremcp 部署 | 30 分钟 | Agent 操作书库的基础 |
 | **P1** | WebDAV 容器部署 | 15 分钟 | KOReader ↔ PC 桥梁 |
 | **P1** | KOReader Cloud Storage → WebDAV 配置 | 10 分钟 | 打通传书管道 |
