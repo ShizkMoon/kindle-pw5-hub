@@ -134,24 +134,45 @@ Apple Watch 对这套体系的价值在于**无感交互**：
 - Home 应用抬手控制灯光
 - 不会在手表上跑 Agent——屏幕太小
 
-### 九、什么是你现在不需要的
+### 九、iCloud+ 的策略
+
+| 层级 | 价格 | 你会用到的 |
+|---|---|---|
+| 免费 5GB | ¥0 | 不够用——一张照片都不够 |
+| 50GB | ¥6/月 | 纯照片勉强够，不含备份 |
+| 200GB | ¥21/月 | 照片 + 整机备份，够用 |
+| **2TB** | **¥68/月** | 全部无忧 |
+
+¥68/月在你的 AI 订阅（¥944-994/月）面前可以忽略。推荐直接上 2TB——不是因为你真的需要 2TB，而是因为不用操心配额。照片自动同步、整机备份、文件跨设备同步——这些是自建方案很难达到相同体验的。
+
+**iCloud 管什么、自建管什么**：
+
+| 服务 | 用谁 | 原因 |
+|---|---|---|
+| 照片同步 + 备份 | iCloud+ | 自建照片同步维护成本高，体验差距大 |
+| 整机备份 | iCloud+ | 换机时一键恢复，自建不可替代 |
+| 日历 | Radicale（自建） | Hermes 需要 CalDAV 读写权限 |
+| 文件同步 | WebDAV（自建） | KOReader 标注回流依赖 WebDAV |
+| 笔记/备忘录 | 待定 | iCloud 自带可用，或自建 |
+
+### 十、什么是你现在不需要的
 
 | 苹果生态组件 | 理由 |
 |---|---|
-| HomePod / HomePod mini | 你已有足够好的音频设备（TAGO 耳机、ADAM D3V 音箱）。HomePod 的唯一增量价值是作为 HomeKit Hub 实现远程访问——但你的 HA 已在云服务器上，远程访问 Nginx 反代已解决 |
+| HomePod / HomePod mini | 你已有足够的音频设备。HomePod 的唯一增量价值是作为 HomeKit Hub——但 HA 已在云服务器上，远程访问通过 Nginx 解决 |
 | Apple TV | 宿舍没有电视 |
-| iCloud+ | Radicale + WebDAV 已替代日历和文件同步需求 |
 | HomeKit Secure Video | 你没有摄像头，也不打算装 |
 
 ## 结论
 
 **现有基础设施已做好 Apple 就绪的准备。** 不需要任何架构变更。当第一部 iPhone 到手时：
 
-1. 装 Tailscale（App Store）
-2. 装 HA Companion App
-3. 在 HA 里启用 HomeKit Bridge，扫码配对
-4. 加 Radicale CalDAV 账户
-5. 装 Readest 做阅读同步
-6. Siri Shortcuts 配几句常用命令
+1. 开通 iCloud+ 2TB（¥68/月）——照片、备份、文件全自动
+2. 装 Tailscale（App Store）
+3. 装 HA Companion App
+4. 在 HA 里启用 HomeKit Bridge，扫码配对
+5. 加 Radicale CalDAV 账户（日历继续自建——Hermes 需要）
+6. 装 Readest 做阅读同步
+7. Siri Shortcuts 配几句常用命令
 
-30 分钟全部就绪。核心基础设施（HA、Radicale、Tailscale、koreader-sync-server）全部已在云端跑着，Apple 设备是纯粹的客户端接入。
+30 分钟全部就绪。iCloud 管照片和备份，自建服务（HA、Radicale、Tailscale、koreader-sync-server）管智能家居和数据主权——各司其职。
