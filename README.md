@@ -14,7 +14,7 @@
 | 越狱 | ✅ WinterBreak，KOReader 主力阅读器，原生系统保留备份 |
 | 格式 | **EPUB 唯一**，任何输入格式 → EPUB 标准化 → KOReader |
 | 亚马逊云 | ❌ 不用（无 Whispersync / Send to Kindle） |
-| AI 骨干 | New API 网关 + 6 模型智能路由 (GLM-5.2/4.7, DeepSeek V3/V4-Pro, MiniMax M3, Kimi K2.7) |
+| AI 骨干 | New API 网关 + 5 模型智能路由 (GLM-5.2/4.7, DeepSeek V4, MiniMax M3, Kimi K2.7) |
 | MCP 生态 | calibremcp (21 工具) 已部署；epub-processor / metadata-enricher / koreader-bridge 规划中 |
 | 运行平台 | ☁️ 云服务器 (2C2G Docker) + 💻 Windows 笔记本 |
 | 月费 | ~¥3-4（纯 AI API 调用费，其余全开源） |
