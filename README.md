@@ -28,6 +28,7 @@
 | [Kindle 部署](docs/kindle-setup.md) | 越狱 → KOReader → 插件安装 → 样式配置 |
 | [MCP 规格](docs/mcp-specs.md) | 3 组 MCP Server 完整工具定义与接口说明 |
 | [阅读在日常节律中的位置](docs/daily-reading-rhythm.md) | Kindle × AI 管线在一天 24 小时里的实际体验 |
+| [选购建议](docs/buying-guide.md) | KPW5 vs KPW6 vs Kobo Clara BW——已持有 KPW5 的前提下是否值得升级 |
 
 ## AI 管线工作流
 
