@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import posixpath
 import re
+import zipfile
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import unquote
+from xml.etree import ElementTree
 
 import ebooklib
 from ebooklib import epub
@@ -150,13 +154,67 @@ def _cover_item_ids(book: epub.EpubBook) -> set[str]:
     return cover_ids
 
 
-def _is_cover_image(item: epub.EpubItem, cover_item_ids: set[str]) -> bool:
+def _normalise_epub_href(href: str) -> str:
+    normalised = posixpath.normpath(unquote(href).replace("\\", "/").lstrip("/"))
+    return "" if normalised == "." else normalised
+
+
+def _opf_relative_href(opf_path: str, href: str) -> str:
+    opf_dir = posixpath.dirname(_normalise_epub_href(opf_path))
+    if not opf_dir:
+        return _normalise_epub_href(href)
+    return _normalise_epub_href(posixpath.join(opf_dir, href))
+
+
+def _epub3_cover_references(path: Path) -> tuple[set[str], set[str]]:
+    cover_ids: set[str] = set()
+    cover_hrefs: set[str] = set()
+    container_ns = {"container": "urn:oasis:names:tc:opendocument:xmlns:container"}
+    opf_ns = {"opf": "http://www.idpf.org/2007/opf"}
+
+    try:
+        with zipfile.ZipFile(path) as archive:
+            container = ElementTree.fromstring(archive.read("META-INF/container.xml"))
+            rootfile = container.find(".//container:rootfile", container_ns)
+            if rootfile is None:
+                return cover_ids, cover_hrefs
+            opf_path = _string_value(rootfile.attrib.get("full-path"))
+            if not opf_path:
+                return cover_ids, cover_hrefs
+
+            opf_root = ElementTree.fromstring(archive.read(opf_path))
+    except (KeyError, ElementTree.ParseError, zipfile.BadZipFile):
+        return cover_ids, cover_hrefs
+
+    for manifest_item in opf_root.findall(".//opf:manifest/opf:item", opf_ns):
+        properties = {
+            token.lower()
+            for token in _string_value(manifest_item.attrib.get("properties")).split()
+        }
+        if "cover-image" not in properties:
+            continue
+
+        item_id = _string_value(manifest_item.attrib.get("id"))
+        href = _string_value(manifest_item.attrib.get("href"))
+        if item_id:
+            cover_ids.add(item_id)
+        if href:
+            cover_hrefs.add(_normalise_epub_href(href))
+            cover_hrefs.add(_opf_relative_href(opf_path, href))
+
+    return cover_ids, cover_hrefs
+
+
+def _is_cover_image(item: epub.EpubItem, cover_item_ids: set[str], cover_hrefs: set[str]) -> bool:
     item_id = _string_value(getattr(item, "id", ""))
     if item_id in cover_item_ids:
         return True
+    href = _normalise_epub_href(str(getattr(item, "file_name", "")))
+    if href in cover_hrefs:
+        return True
     if "cover-image" in _property_tokens(item):
         return True
-    return PurePosixPath(str(getattr(item, "file_name", "")).replace("\\", "/")).stem.lower() == "cover"
+    return PurePosixPath(href).stem.lower() == "cover"
 
 
 def inspect_epub(path: Path) -> EpubInspection:
@@ -179,11 +237,13 @@ def inspect_epub(path: Path) -> EpubInspection:
         chapter_index += 1
 
     cover_item_ids = _cover_item_ids(book)
+    epub3_cover_ids, epub3_cover_hrefs = _epub3_cover_references(path)
+    cover_item_ids.update(epub3_cover_ids)
     for item in book.get_items():
         media_type = str(getattr(item, "media_type", ""))
         href = str(getattr(item, "file_name", ""))
         if media_type.startswith("image/"):
-            role = "cover" if _is_cover_image(item, cover_item_ids) else "unknown"
+            role = "cover" if _is_cover_image(item, cover_item_ids, epub3_cover_hrefs) else "unknown"
             if role == "cover":
                 report.missing_cover = False
             report.images.append(ImageInfo(href, media_type, len(item.get_content()), role))

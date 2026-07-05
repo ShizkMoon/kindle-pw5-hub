@@ -1,9 +1,29 @@
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 from scripts.hermes_books.inspect import inspect_epub, write_quality_report
 from tests.hermes_books.helpers import make_epub
+
+
+def _add_epub3_cover_image_property(epub_path: Path) -> None:
+    with zipfile.ZipFile(epub_path, "r") as source:
+        entries = {name: source.read(name) for name in source.namelist()}
+
+    opf_path = "EPUB/content.opf"
+    opf = entries[opf_path].decode("utf-8")
+    opf = opf.replace(
+        "</manifest>",
+        '    <item href="images/front.jpg" id="img1" media-type="image/jpeg" properties="cover-image"/>\n'
+        "  </manifest>",
+    )
+    entries[opf_path] = opf.encode("utf-8")
+    entries["EPUB/images/front.jpg"] = b"fake image bytes"
+
+    with zipfile.ZipFile(epub_path, "w") as target:
+        for name, content in entries.items():
+            target.writestr(name, content)
 
 
 class InspectTests(unittest.TestCase):
@@ -63,6 +83,18 @@ class InspectTests(unittest.TestCase):
             self.assertFalse(report.missing_cover)
             self.assertTrue(
                 any(image.href == "images/frontispiece.jpg" and image.role == "cover" for image in report.images)
+            )
+
+    def test_epub3_cover_image_manifest_property_detects_non_cover_filename(self):
+        with tempfile.TemporaryDirectory() as td:
+            epub_path = make_epub(Path(td) / "book.epub")
+            _add_epub3_cover_image_property(epub_path)
+
+            report = inspect_epub(epub_path)
+
+            self.assertFalse(report.missing_cover)
+            self.assertTrue(
+                any(image.href == "images/front.jpg" and image.role == "cover" for image in report.images)
             )
 
 
