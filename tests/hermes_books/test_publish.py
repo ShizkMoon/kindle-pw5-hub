@@ -144,7 +144,8 @@ class PublishTests(unittest.TestCase):
             report = publisher.publish("/books/Book - Author.epub", epub, manifest(UpdateDecision.NEW_BOOK))
 
             self.assertEqual(report["status"], "published")
-            self.assertEqual(writes, ["/books/Book - Author.hermes.json", "/books/Book - Author.epub"])
+            live_writes = [path for path in writes if not path.startswith("/books/.hermes-capabilities/")]
+            self.assertEqual(live_writes, ["/books/Book - Author.hermes.json", "/books/Book - Author.epub"])
             self.assertTrue((webdav / "books/Book - Author.epub").exists())
             self.assertTrue((webdav / "books/Book - Author.hermes.json").exists())
 
@@ -176,6 +177,55 @@ class PublishTests(unittest.TestCase):
             self.assertEqual(report["status"], "published")
             self.assertTrue((webdav / "books/Book - Author.epub").exists())
             self.assertTrue((webdav / "books/Book - Author.hermes.json").exists())
+
+    def test_new_book_http_like_client_that_ignores_if_none_match_goes_pending_before_live_publish(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = root / "webdav"
+            epub = root / "candidate.epub"
+            epub.write_bytes(b"new-epub")
+
+            class IgnoringIfNoneMatchClient:
+                supports_new_publish = True
+                supports_existing_overwrite = True
+
+                def __init__(self, client_root):
+                    self.inner = LocalWebDavClient(client_root)
+
+                def stat(self, path):
+                    return self.inner.stat(path)
+
+                def exists(self, path):
+                    return self.inner.exists(path)
+
+                def get(self, path):
+                    return self.inner.get(path)
+
+                def put(self, path, data):
+                    return self.inner.put(path, data)
+
+                def put_if_absent(self, path, data):
+                    if path == "/books/Book - Author.hermes.json" or path == "/books/Book - Author.epub":
+                        raise AssertionError("live book files must not be touched before probe passes")
+                    self.inner.put(path, data)
+                    return WebDavWriteResult(self.inner.stat(path).etag)
+
+                def put_if_match(self, path, data, etag):
+                    return self.inner.put_if_match(path, data, etag)
+
+                def delete_if_match(self, path, etag):
+                    return self.inner.delete_if_match(path, self.inner.stat(path).etag)
+
+                def mkdir(self, path):
+                    return self.inner.mkdir(path)
+
+            publisher = WebDavPublisher(IgnoringIfNoneMatchClient(webdav))
+            report = publisher.publish("/books/Book - Author.epub", epub, manifest(UpdateDecision.NEW_BOOK))
+
+            self.assertEqual(report["status"], "pending")
+            self.assertIn("If-None-Match enforcement", report["reason"])
+            self.assertFalse((webdav / "books/Book - Author.epub").exists())
+            self.assertFalse((webdav / "books/Book - Author.hermes.json").exists())
 
     def test_risky_update_goes_to_pending_without_touching_old_book(self):
         with tempfile.TemporaryDirectory() as td:

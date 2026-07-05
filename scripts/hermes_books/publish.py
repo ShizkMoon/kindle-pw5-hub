@@ -385,6 +385,31 @@ class WebDavPublisher:
     def _supports_new_publish(self) -> bool:
         return bool(getattr(self.client, "supports_new_publish", False))
 
+    def _new_publish_capability_error(self, target_epub_path: str) -> str | None:
+        if isinstance(self.client, LocalWebDavClient):
+            return None
+
+        probe_dir = posixpath.join(posixpath.dirname(target_epub_path), ".hermes-capabilities")
+        probe_path = posixpath.join(probe_dir, f"{uuid.uuid4().hex}.probe")
+        try:
+            self.client.mkdir(probe_dir)
+            first = self.client.put_if_absent(probe_path, b"probe-1")
+            if not self._verified_after_write(probe_path, b"probe-1", first, require_etag=False):
+                return "new target publish probe could not be verified"
+            try:
+                second = self.client.put_if_absent(probe_path, b"probe-2")
+            except ConditionalWriteFailed:
+                pass
+            except ConditionalWriteUnsupported:
+                return "new target publish requires WebDAV If-None-Match support"
+            else:
+                self._safe_delete_if_match(probe_path, second.etag)
+                return "new target publish requires WebDAV If-None-Match enforcement"
+            self._safe_delete_if_match(probe_path, first.etag)
+            return None
+        except Exception:
+            return "new target publish probe failed"
+
     def _verified_after_write(
         self,
         path: str,
@@ -818,6 +843,15 @@ class WebDavPublisher:
                 manifest,
                 decision_value,
                 "new target publish requires verified conditional WebDAV support",
+            )
+        capability_error = self._new_publish_capability_error(target_epub_path)
+        if capability_error is not None:
+            return self._pending_update(
+                target_epub_path,
+                epub_path,
+                manifest,
+                decision_value,
+                capability_error,
             )
 
         return self._publish_new_book(target_epub_path, manifest_path, epub_path, manifest, decision_value)
