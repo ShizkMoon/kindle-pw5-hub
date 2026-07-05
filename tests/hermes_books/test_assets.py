@@ -11,15 +11,16 @@ from tests.hermes_books.helpers import make_epub
 
 class FakeProvider:
     def candidates(self, title: str, author: str, role: str):
+        source_url = f"https://assets.example/{role}.jpg"
         return [
             AssetCandidate(
                 role=role,
-                source_url="https://assets.example/cover.jpg",
-                local_path=Path("cover.jpg"),
+                source_url=source_url,
+                local_path=Path(f"{role}.jpg"),
                 width=1600,
                 height=2400,
                 confidence=0.93,
-                reason="fake high confidence cover",
+                reason=f"fake high confidence {role}",
             )
         ]
 
@@ -58,6 +59,16 @@ class AssetTests(unittest.TestCase):
             asset_report = enricher.plan("Book", "Author", report, Path(td))
             self.assertEqual(asset_report.auto_adopted, [])
             self.assertEqual(asset_report.pending[0].confidence, 0.5)
+
+    def test_aggressive_illustrations_stay_pending_until_insertion_is_supported(self):
+        with tempfile.TemporaryDirectory() as td:
+            report = inspect_epub(make_epub(Path(td) / "book.epub"))
+            enricher = AssetEnricher(AssetEnrichmentConfig(mode=AssetMode.AGGRESSIVE), FakeProvider())
+
+            asset_report = enricher.plan("Book", "Author", report, Path(td))
+
+            self.assertEqual([candidate.role for candidate in asset_report.auto_adopted], ["cover"])
+            self.assertIn("illustration", [candidate.role for candidate in asset_report.pending])
 
 
 if __name__ == "__main__":

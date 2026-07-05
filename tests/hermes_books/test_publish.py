@@ -201,6 +201,40 @@ class PublishTests(unittest.TestCase):
             self.assertNotEqual(remote_manifest.read_bytes(), old_manifest_bytes)
             self.assertEqual(report["status"], "published")
 
+    def test_safe_append_without_transactional_overwrite_support_goes_pending_without_touching_old_book(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = root / "webdav"
+            (webdav / "books").mkdir(parents=True)
+            remote_epub = webdav / "books/Book - Author.epub"
+            remote_manifest = webdav / "books/Book - Author.hermes.json"
+            old_epub_bytes = b"old-epub"
+            old_manifest_bytes = b'{"old":true}'
+            remote_epub.write_bytes(old_epub_bytes)
+            remote_manifest.write_bytes(old_manifest_bytes)
+            epub = root / "candidate.epub"
+            epub.write_bytes(b"new-epub")
+
+            class NonTransactionalClient(LocalWebDavClient):
+                supports_existing_overwrite = False
+
+                def put_if_match(self, path, data, etag):
+                    raise AssertionError("existing overwrite must not be attempted")
+
+            publisher = WebDavPublisher(NonTransactionalClient(webdav))
+            report = publisher.publish(
+                "/books/Book - Author.epub",
+                epub,
+                manifest(UpdateDecision.SAFE_APPEND),
+                expected_old_epub_hash=sha256_bytes(old_epub_bytes),
+                expected_old_manifest_hash=sha256_bytes(old_manifest_bytes),
+            )
+
+            self.assertEqual(report["status"], "pending")
+            self.assertIn("transactional WebDAV support", report["reason"])
+            self.assertEqual(remote_epub.read_bytes(), old_epub_bytes)
+            self.assertEqual(remote_manifest.read_bytes(), old_manifest_bytes)
+
     def test_safe_append_concurrent_write_between_hash_check_and_put_goes_pending(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -254,6 +288,43 @@ class PublishTests(unittest.TestCase):
             self.assertEqual(remote_manifest.read_bytes(), concurrent_manifest_bytes)
             self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
 
+    def test_safe_append_target_only_race_after_target_put_rolls_back_manifest(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = root / "webdav"
+            (webdav / "books").mkdir(parents=True)
+            target_path = "/books/Book - Author.epub"
+            manifest_path = "/books/Book - Author.hermes.json"
+            remote_epub = webdav / "books/Book - Author.epub"
+            remote_manifest = webdav / "books/Book - Author.hermes.json"
+            old_epub_bytes = b"old-epub"
+            old_manifest_bytes = b'{"old":true}'
+            concurrent_epub_bytes = b"target-only-concurrent-epub"
+            remote_epub.write_bytes(old_epub_bytes)
+            remote_manifest.write_bytes(old_manifest_bytes)
+            epub = root / "candidate.epub"
+            epub.write_bytes(b"new-epub")
+
+            class TargetRaceBeforeManifestClient(LocalWebDavClient):
+                def put_if_match(self, path, data, etag):
+                    if path == manifest_path and data != old_manifest_bytes:
+                        remote_epub.write_bytes(concurrent_epub_bytes)
+                    return super().put_if_match(path, data, etag)
+
+            publisher = WebDavPublisher(TargetRaceBeforeManifestClient(webdav))
+            report = publisher.publish(
+                target_path,
+                epub,
+                manifest(UpdateDecision.SAFE_APPEND),
+                expected_old_epub_hash=sha256_bytes(old_epub_bytes),
+                expected_old_manifest_hash=sha256_bytes(old_manifest_bytes),
+            )
+
+            self.assertEqual(report["status"], "pending")
+            self.assertEqual(remote_epub.read_bytes(), concurrent_epub_bytes)
+            self.assertEqual(remote_manifest.read_bytes(), old_manifest_bytes)
+            self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
+
     def test_safe_append_rollback_does_not_overwrite_concurrent_writer_after_manifest_conflict(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -265,7 +336,6 @@ class PublishTests(unittest.TestCase):
             remote_manifest = webdav / "books/Book - Author.hermes.json"
             old_epub_bytes = b"old-epub"
             old_manifest_bytes = b'{"old":true}'
-            concurrent_epub_bytes = b"concurrent-epub"
             concurrent_manifest_bytes = b'{"concurrent":true}'
             remote_epub.write_bytes(old_epub_bytes)
             remote_manifest.write_bytes(old_manifest_bytes)
@@ -276,7 +346,6 @@ class PublishTests(unittest.TestCase):
                 def put(self, path, data):
                     if path == target_path and data == b"new-epub":
                         super().put(path, data)
-                        remote_epub.write_bytes(concurrent_epub_bytes)
                         return None
                     if path == manifest_path and data != old_manifest_bytes:
                         remote_manifest.write_bytes(concurrent_manifest_bytes)
@@ -284,10 +353,6 @@ class PublishTests(unittest.TestCase):
                     return super().put(path, data)
 
                 def put_if_match(self, path, data, etag):
-                    if path == target_path and data == b"new-epub":
-                        result = super().put_if_match(path, data, etag)
-                        remote_epub.write_bytes(concurrent_epub_bytes)
-                        return result
                     if path == manifest_path and data != old_manifest_bytes:
                         remote_manifest.write_bytes(concurrent_manifest_bytes)
                     return super().put_if_match(path, data, etag)
@@ -302,7 +367,7 @@ class PublishTests(unittest.TestCase):
             )
 
             self.assertEqual(report["status"], "pending")
-            self.assertEqual(remote_epub.read_bytes(), concurrent_epub_bytes)
+            self.assertEqual(remote_epub.read_bytes(), old_epub_bytes)
             self.assertEqual(remote_manifest.read_bytes(), concurrent_manifest_bytes)
             self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
 

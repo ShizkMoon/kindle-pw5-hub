@@ -75,6 +75,8 @@ class WebDavClient(Protocol):
 
 
 class LocalWebDavClient:
+    supports_existing_overwrite = True
+
     def __init__(self, root: Path) -> None:
         self.root = root.resolve()
 
@@ -152,6 +154,8 @@ class LocalWebDavClient:
 
 
 class HttpWebDavClient:
+    supports_existing_overwrite = False
+
     def __init__(self, base_url: str, username: str = "", password: str = "") -> None:
         self.base_url = base_url.rstrip("/")
         self.username = username
@@ -341,6 +345,32 @@ class WebDavPublisher:
         except (ConditionalWriteFailed, ConditionalWriteUnsupported):
             return False
 
+    def _supports_existing_overwrite(self) -> bool:
+        return bool(getattr(self.client, "supports_existing_overwrite", False))
+
+    def _verified_etag_after_write(
+        self,
+        path: str,
+        expected_data: bytes,
+        write_result: WebDavWriteResult,
+    ) -> str | None:
+        try:
+            state = self.client.stat(path)
+        except Exception:
+            return None
+        if write_result.etag:
+            return write_result.etag if state.exists and state.etag == write_result.etag else None
+
+        if not state.exists or not state.etag:
+            return None
+        try:
+            current_data = self.client.get(path)
+        except Exception:
+            return None
+        if hashlib.sha256(current_data).hexdigest() != hashlib.sha256(expected_data).hexdigest():
+            return None
+        return state.etag
+
     def _publish_new_book(
         self,
         target_epub_path: str,
@@ -400,11 +430,22 @@ class WebDavPublisher:
         decision_value: str,
         existing: _ExistingRemote,
     ) -> dict[str, str]:
+        if not self._supports_existing_overwrite():
+            return self._pending_update(
+                target_epub_path,
+                epub_path,
+                manifest,
+                decision_value,
+                "existing target overwrite requires transactional WebDAV support",
+            )
+
+        candidate_epub = epub_path.read_bytes()
+        candidate_manifest = manifest.to_json().encode("utf-8")
         target_write: WebDavWriteResult | None = None
         try:
             target_write = self.client.put_if_match(
                 target_epub_path,
-                epub_path.read_bytes(),
+                candidate_epub,
                 existing.epub_etag,
             )
         except ConditionalWriteFailed:
@@ -424,17 +465,32 @@ class WebDavPublisher:
                 "existing target could not be overwritten conditionally",
             )
 
+        target_write_etag = self._verified_etag_after_write(
+            target_epub_path,
+            candidate_epub,
+            target_write,
+        )
+        if not target_write_etag:
+            return self._pending_update(
+                target_epub_path,
+                epub_path,
+                manifest,
+                decision_value,
+                "existing target write could not be verified after conditional publish",
+            )
+
+        manifest_write: WebDavWriteResult | None = None
         try:
-            self.client.put_if_match(
+            manifest_write = self.client.put_if_match(
                 manifest_path,
-                manifest.to_json().encode("utf-8"),
+                candidate_manifest,
                 existing.manifest_etag,
             )
         except ConditionalWriteFailed:
             self._safe_put_if_match(
                 target_epub_path,
                 existing.epub_bytes,
-                target_write.etag if target_write else None,
+                target_write_etag,
             )
             return self._pending_update(
                 target_epub_path,
@@ -447,7 +503,7 @@ class WebDavPublisher:
             self._safe_put_if_match(
                 target_epub_path,
                 existing.epub_bytes,
-                target_write.etag if target_write else None,
+                target_write_etag,
             )
             return self._pending_update(
                 target_epub_path,
@@ -460,9 +516,37 @@ class WebDavPublisher:
             self._safe_put_if_match(
                 target_epub_path,
                 existing.epub_bytes,
-                target_write.etag if target_write else None,
+                target_write_etag,
             )
             raise
+
+        manifest_write_etag = self._verified_etag_after_write(
+            manifest_path,
+            candidate_manifest,
+            manifest_write,
+        )
+        if not manifest_write_etag:
+            self._safe_put_if_match(target_epub_path, existing.epub_bytes, target_write_etag)
+            return self._pending_update(
+                target_epub_path,
+                epub_path,
+                manifest,
+                decision_value,
+                "existing manifest write could not be verified after conditional publish",
+            )
+
+        final_target = self.client.stat(target_epub_path)
+        final_manifest = self.client.stat(manifest_path)
+        if final_target.etag != target_write_etag or final_manifest.etag != manifest_write_etag:
+            self._safe_put_if_match(manifest_path, existing.manifest_bytes, manifest_write_etag)
+            self._safe_put_if_match(target_epub_path, existing.epub_bytes, target_write_etag)
+            return self._pending_update(
+                target_epub_path,
+                epub_path,
+                manifest,
+                decision_value,
+                "existing target changed before publish verification completed",
+            )
         return {"status": "published", "path": target_epub_path}
 
     def _pending_update(
@@ -528,6 +612,14 @@ class WebDavPublisher:
             return self._pending_update(target_epub_path, epub_path, manifest, decision_value)
 
         if target_state.exists:
+            if not self._supports_existing_overwrite():
+                return self._pending_update(
+                    target_epub_path,
+                    epub_path,
+                    manifest,
+                    decision_value,
+                    "existing target overwrite requires transactional WebDAV support",
+                )
             existing = self._read_existing_remote(
                 target_epub_path,
                 manifest_path,

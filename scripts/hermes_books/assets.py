@@ -147,6 +147,8 @@ class AssetEnricher:
             for candidate in candidates:
                 if self.config.require_source_url and not candidate.source_url:
                     report.pending.append(candidate)
+                elif role != "cover":
+                    report.pending.append(candidate)
                 elif candidate.confidence >= threshold:
                     report.auto_adopted.append(candidate)
                 else:
