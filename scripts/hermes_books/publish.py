@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import Callable
+from datetime import datetime, timezone
 import posixpath
 import urllib.error
+from urllib.parse import quote
 import urllib.request
 from pathlib import Path
 from typing import Protocol
@@ -26,10 +29,28 @@ class WebDavClient(Protocol):
 
 class LocalWebDavClient:
     def __init__(self, root: Path) -> None:
-        self.root = root
+        self.root = root.resolve()
 
     def _path(self, path: str) -> Path:
-        return self.root / path.strip("/")
+        stripped = path.strip("/")
+        if not stripped or "\\" in path:
+            raise ValueError(f"invalid WebDAV path: {path!r}")
+
+        segments = stripped.split("/")
+        if any(
+            not segment
+            or segment == ".."
+            or (len(segment) >= 2 and segment[0].isalpha() and segment[1] == ":")
+            for segment in segments
+        ):
+            raise ValueError(f"invalid WebDAV path: {path!r}")
+
+        target = (self.root / posixpath.join(*segments)).resolve()
+        try:
+            target.relative_to(self.root)
+        except ValueError as exc:
+            raise ValueError(f"WebDAV path escapes root: {path!r}") from exc
+        return target
 
     def exists(self, path: str) -> bool:
         return self._path(path).exists()
@@ -52,8 +73,11 @@ class HttpWebDavClient:
         self.username = username
         self.password = password
 
+    def _quote_path(self, path: str) -> str:
+        return quote(path.strip("/"), safe="/")
+
     def _request(self, path: str, method: str, data: bytes | None = None) -> bytes:
-        url = self.base_url + "/" + path.strip("/")
+        url = self.base_url + "/" + self._quote_path(path)
         req = urllib.request.Request(url, data=data, method=method)
         if self.username:
             token = base64.b64encode(f"{self.username}:{self.password}".encode()).decode()
@@ -80,16 +104,35 @@ class HttpWebDavClient:
         self._request(path, "PUT", data)
 
     def mkdir(self, path: str) -> None:
-        try:
-            self._request(path, "MKCOL")
-        except urllib.error.HTTPError as exc:
-            if exc.code not in {405, 409}:
-                raise
+        current = ""
+        for segment in path.strip("/").split("/"):
+            if not segment:
+                continue
+            current = f"{current}/{segment}"
+            try:
+                self._request(current, "MKCOL")
+            except urllib.error.HTTPError as exc:
+                if exc.code != 405:
+                    raise
 
 
 class WebDavPublisher:
-    def __init__(self, client: WebDavClient) -> None:
+    def __init__(self, client: WebDavClient, timestamp: Callable[[], str] | None = None) -> None:
         self.client = client
+        self.timestamp = timestamp or self._utc_timestamp
+
+    def _utc_timestamp(self) -> str:
+        return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+    def _backup_dir(self, target_epub_path: str, slug: str) -> str:
+        backup_root = posixpath.join(posixpath.dirname(target_epub_path), ".backups", slug)
+        timestamp = self.timestamp()
+        backup_dir = posixpath.join(backup_root, timestamp)
+        suffix = 2
+        while self.client.exists(posixpath.join(backup_dir, "old.epub")):
+            backup_dir = posixpath.join(backup_root, f"{timestamp}-{suffix}")
+            suffix += 1
+        return backup_dir
 
     def publish(self, target_epub_path: str, epub_path: Path, manifest: BookManifest) -> dict[str, str]:
         slug = Path(target_epub_path).stem
@@ -111,7 +154,7 @@ class WebDavPublisher:
             return {"status": "pending", "path": pending_dir}
 
         if self.client.exists(target_epub_path):
-            backup_dir = posixpath.join(posixpath.dirname(target_epub_path), ".backups", slug)
+            backup_dir = self._backup_dir(target_epub_path, slug)
             self.client.mkdir(backup_dir)
             self.client.put(posixpath.join(backup_dir, "old.epub"), self.client.get(target_epub_path))
             if self.client.exists(manifest_path):
