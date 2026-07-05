@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .assets import AssetEnricher
+from .assets import AssetEnricher, AssetFetcher, AssetProvider, apply_auto_adopted_assets
 from .build import build_draft_from_txt, normalize_existing_epub
 from .config import HermesConfig
 from .diff import compare_for_update
@@ -176,6 +176,8 @@ def run_intake(
     *,
     webdav_client_factory: Callable[[HermesConfig], WebDavClient] | None = None,
     epub_validator: Callable[[Path], EpubValidationResult] | None = None,
+    asset_provider: AssetProvider | None = None,
+    asset_fetcher: AssetFetcher | None = None,
 ) -> IntakeResult:
     config = config or HermesConfig.load(None)
     books_path = _valid_books_path(config.webdav.books_path)
@@ -199,14 +201,18 @@ def run_intake(
         raise ValueError(f"Unsupported input format for MVP: {job.input_format}")
 
     inspection = inspect_epub(output_epub)
-    write_quality_report(inspection, paths.reports_dir / "quality-report.md")
 
-    asset_report = AssetEnricher(config.asset_enrichment).plan(
+    asset_cache_dir = job.run_dir / "assets-cache"
+    asset_report = AssetEnricher(config.asset_enrichment, asset_provider).plan(
         title,
         author,
         inspection,
-        job.run_dir / "assets-cache",
+        asset_cache_dir,
     )
+    if apply_auto_adopted_assets(output_epub, asset_report, asset_cache_dir, asset_fetcher):
+        inspection = inspect_epub(output_epub)
+
+    write_quality_report(inspection, paths.reports_dir / "quality-report.md")
     asset_report_data = json.loads(asset_report.to_json())
     (paths.reports_dir / "asset-report.json").write_text(
         json.dumps(asset_report_data, ensure_ascii=False, indent=2),

@@ -5,7 +5,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+from scripts.hermes_books.assets import AssetCandidate
 from scripts.hermes_books.config import AssetEnrichmentConfig, HermesConfig, PipelineConfig
+from scripts.hermes_books.inspect import inspect_epub
 from scripts.hermes_books.intake import EpubValidationResult, run_intake
 from scripts.hermes_books.models import AssetMode, UpdateDecision
 from scripts.hermes_books.publish import LocalWebDavClient
@@ -65,6 +67,53 @@ class IntakeTests(unittest.TestCase):
 
             self.assertEqual(result.publish_report["status"], "published")
             self.assertTrue((root / "webdav/books/Book - Author.epub").exists())
+
+    def test_auto_adopted_cover_is_inserted_before_validation_and_publish(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source_epub = make_epub(root / "source.epub")
+            cover_path = root / "cover.jpg"
+            cover_path.write_bytes(b"fake cover bytes")
+
+            class LocalCoverProvider:
+                def candidates(self, title: str, author: str, role: str):
+                    return [
+                        AssetCandidate(
+                            role=role,
+                            source_url="https://assets.example/cover.jpg",
+                            local_path=cover_path,
+                            width=1600,
+                            height=2400,
+                            confidence=0.95,
+                            reason="local high confidence cover",
+                        )
+                    ]
+
+            validation_seen = {}
+
+            def validator(path):
+                validation_seen["missing_cover"] = inspect_epub(path).missing_cover
+                return EpubValidationResult(status="passed")
+
+            result = run_intake(
+                input_path=source_epub,
+                title="Book",
+                author="Author",
+                runs_root=root / "runs",
+                config=HermesConfig(
+                    asset_enrichment=AssetEnrichmentConfig(mode=AssetMode.BALANCED),
+                    pipeline=PipelineConfig(require_epubcheck=False),
+                ),
+                webdav_client=LocalWebDavClient(root / "webdav"),
+                epub_validator=validator,
+                asset_provider=LocalCoverProvider(),
+            )
+
+            published_epub = root / "webdav/books/Book - Author.epub"
+            self.assertEqual(result.publish_report["status"], "published")
+            self.assertFalse(validation_seen["missing_cover"])
+            self.assertFalse(inspect_epub(result.output_epub).missing_cover)
+            self.assertFalse(inspect_epub(published_epub).missing_cover)
 
     def test_default_client_path_compares_existing_remote_update(self):
         with tempfile.TemporaryDirectory() as td:

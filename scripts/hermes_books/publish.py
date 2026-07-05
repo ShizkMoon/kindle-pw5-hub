@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import posixpath
@@ -14,7 +15,43 @@ from typing import Protocol
 from .models import BookManifest, UpdateDecision
 
 
+@dataclass(frozen=True)
+class WebDavResource:
+    exists: bool
+    etag: str | None = None
+
+
+@dataclass(frozen=True)
+class WebDavWriteResult:
+    etag: str | None = None
+
+
+@dataclass(frozen=True)
+class _WebDavResponse:
+    body: bytes
+    etag: str | None = None
+
+
+@dataclass(frozen=True)
+class _ExistingRemote:
+    epub_bytes: bytes
+    manifest_bytes: bytes
+    epub_etag: str
+    manifest_etag: str
+
+
+class ConditionalWriteFailed(RuntimeError):
+    pass
+
+
+class ConditionalWriteUnsupported(RuntimeError):
+    pass
+
+
 class WebDavClient(Protocol):
+    def stat(self, path: str) -> WebDavResource:
+        ...
+
     def exists(self, path: str) -> bool:
         ...
 
@@ -22,6 +59,15 @@ class WebDavClient(Protocol):
         ...
 
     def put(self, path: str, data: bytes) -> None:
+        ...
+
+    def put_if_absent(self, path: str, data: bytes) -> WebDavWriteResult:
+        ...
+
+    def put_if_match(self, path: str, data: bytes, etag: str) -> WebDavWriteResult:
+        ...
+
+    def delete_if_match(self, path: str, etag: str) -> None:
         ...
 
     def mkdir(self, path: str) -> None:
@@ -53,8 +99,19 @@ class LocalWebDavClient:
             raise ValueError(f"WebDAV path escapes root: {path!r}") from exc
         return target
 
+    def _etag(self, data: bytes) -> str:
+        return f'"{hashlib.sha256(data).hexdigest()}"'
+
+    def stat(self, path: str) -> WebDavResource:
+        target = self._path(path)
+        if not target.exists():
+            return WebDavResource(False)
+        if not target.is_file():
+            return WebDavResource(True)
+        return WebDavResource(True, self._etag(target.read_bytes()))
+
     def exists(self, path: str) -> bool:
-        return self._path(path).exists()
+        return self.stat(path).exists
 
     def get(self, path: str) -> bytes:
         return self._path(path).read_bytes()
@@ -63,6 +120,32 @@ class LocalWebDavClient:
         target = self._path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
+
+    def put_if_absent(self, path: str, data: bytes) -> WebDavWriteResult:
+        target = self._path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with target.open("xb") as fh:
+                fh.write(data)
+        except FileExistsError as exc:
+            raise ConditionalWriteFailed(f"{path} already exists") from exc
+        return WebDavWriteResult(self._etag(data))
+
+    def put_if_match(self, path: str, data: bytes, etag: str) -> WebDavWriteResult:
+        target = self._path(path)
+        state = self.stat(path)
+        if not state.exists or state.etag != etag:
+            raise ConditionalWriteFailed(f"{path} changed before conditional write")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        return WebDavWriteResult(self._etag(data))
+
+    def delete_if_match(self, path: str, etag: str) -> None:
+        target = self._path(path)
+        state = self.stat(path)
+        if not state.exists or state.etag != etag:
+            raise ConditionalWriteFailed(f"{path} changed before conditional delete")
+        target.unlink()
 
     def mkdir(self, path: str) -> None:
         self._path(path).mkdir(parents=True, exist_ok=True)
@@ -77,32 +160,70 @@ class HttpWebDavClient:
     def _quote_path(self, path: str) -> str:
         return quote(path.strip("/"), safe="/")
 
-    def _request(self, path: str, method: str, data: bytes | None = None) -> bytes:
+    def _strong_etag(self, raw_etag: str | None) -> str | None:
+        if not raw_etag:
+            return None
+        etag = raw_etag.strip()
+        if not etag or etag.startswith("W/"):
+            return None
+        return etag
+
+    def _request(
+        self,
+        path: str,
+        method: str,
+        data: bytes | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> _WebDavResponse:
         url = self.base_url + "/" + self._quote_path(path)
         req = urllib.request.Request(url, data=data, method=method)
         if self.username:
             token = base64.b64encode(f"{self.username}:{self.password}".encode()).decode()
             req.add_header("Authorization", f"Basic {token}")
+        for key, value in (headers or {}).items():
+            req.add_header(key, value)
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
-                return resp.read()
+                response_headers = getattr(resp, "headers", {})
+                raw_etag = response_headers.get("ETag") if hasattr(response_headers, "get") else None
+                return _WebDavResponse(resp.read(), self._strong_etag(raw_etag))
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 raise FileNotFoundError(path) from exc
+            if exc.code == 412:
+                raise ConditionalWriteFailed(f"{path} conditional write failed") from exc
             raise
 
-    def exists(self, path: str) -> bool:
+    def stat(self, path: str) -> WebDavResource:
         try:
-            self._request(path, "HEAD")
-            return True
+            response = self._request(path, "HEAD")
+            return WebDavResource(True, response.etag)
         except FileNotFoundError:
-            return False
+            return WebDavResource(False)
+
+    def exists(self, path: str) -> bool:
+        return self.stat(path).exists
 
     def get(self, path: str) -> bytes:
-        return self._request(path, "GET")
+        return self._request(path, "GET").body
 
     def put(self, path: str, data: bytes) -> None:
         self._request(path, "PUT", data)
+
+    def put_if_absent(self, path: str, data: bytes) -> WebDavWriteResult:
+        response = self._request(path, "PUT", data, {"If-None-Match": "*"})
+        return WebDavWriteResult(response.etag)
+
+    def put_if_match(self, path: str, data: bytes, etag: str) -> WebDavWriteResult:
+        if not etag:
+            raise ConditionalWriteUnsupported(f"{path} has no strong ETag for If-Match")
+        response = self._request(path, "PUT", data, {"If-Match": etag})
+        return WebDavWriteResult(response.etag)
+
+    def delete_if_match(self, path: str, etag: str) -> None:
+        if not etag:
+            raise ConditionalWriteUnsupported(f"{path} has no strong ETag for If-Match")
+        self._request(path, "DELETE", headers={"If-Match": etag})
 
     def mkdir(self, path: str) -> None:
         current = ""
@@ -134,6 +255,215 @@ class WebDavPublisher:
             backup_dir = posixpath.join(backup_root, f"{timestamp}-{suffix}")
             suffix += 1
         return backup_dir
+
+    def _read_existing_remote(
+        self,
+        target_epub_path: str,
+        manifest_path: str,
+        initial_target: WebDavResource,
+        initial_manifest: WebDavResource,
+        expected_old_epub_hash: str | None,
+        expected_old_manifest_hash: str | None,
+    ) -> _ExistingRemote | str:
+        if not initial_manifest.exists:
+            return "existing target has no Hermes manifest"
+        if expected_old_epub_hash is None or expected_old_manifest_hash is None:
+            return "existing target overwrite requires expected old remote hashes"
+        if not initial_target.etag or not initial_manifest.etag:
+            return "existing target or manifest lacks a strong ETag for conditional overwrite"
+
+        try:
+            old_manifest_bytes = self.client.get(manifest_path)
+            old_epub_bytes = self.client.get(target_epub_path)
+            final_target = self.client.stat(target_epub_path)
+            final_manifest = self.client.stat(manifest_path)
+        except Exception:
+            return "existing target or manifest unreadable"
+
+        if (
+            not final_target.exists
+            or not final_manifest.exists
+            or final_target.etag != initial_target.etag
+            or final_manifest.etag != initial_manifest.etag
+        ):
+            return "existing target changed while preparing conditional publish"
+
+        current_epub_hash = hashlib.sha256(old_epub_bytes).hexdigest()
+        current_manifest_hash = hashlib.sha256(old_manifest_bytes).hexdigest()
+        if (
+            current_epub_hash != expected_old_epub_hash
+            or current_manifest_hash != expected_old_manifest_hash
+        ):
+            return "existing target changed since update diff"
+
+        return _ExistingRemote(
+            old_epub_bytes,
+            old_manifest_bytes,
+            final_target.etag,
+            final_manifest.etag,
+        )
+
+    def _write_backup(self, target_epub_path: str, slug: str, existing: _ExistingRemote) -> str | None:
+        backup_root = posixpath.join(posixpath.dirname(target_epub_path), ".backups", slug)
+        timestamp = self.timestamp()
+        for suffix in range(1, 100):
+            backup_name = timestamp if suffix == 1 else f"{timestamp}-{suffix}"
+            backup_dir = posixpath.join(backup_root, backup_name)
+            self.client.mkdir(backup_dir)
+            try:
+                self.client.put_if_absent(posixpath.join(backup_dir, "old.epub"), existing.epub_bytes)
+                self.client.put_if_absent(
+                    posixpath.join(backup_dir, "old.hermes.json"),
+                    existing.manifest_bytes,
+                )
+                return None
+            except ConditionalWriteFailed:
+                continue
+            except ConditionalWriteUnsupported:
+                return "backup write could not be made conditionally"
+        return "could not reserve a unique backup path"
+
+    def _safe_put_if_match(self, path: str, data: bytes, etag: str | None) -> bool:
+        if not etag:
+            return False
+        try:
+            self.client.put_if_match(path, data, etag)
+            return True
+        except (ConditionalWriteFailed, ConditionalWriteUnsupported):
+            return False
+
+    def _safe_delete_if_match(self, path: str, etag: str | None) -> bool:
+        if not etag:
+            return False
+        try:
+            self.client.delete_if_match(path, etag)
+            return True
+        except (ConditionalWriteFailed, ConditionalWriteUnsupported):
+            return False
+
+    def _publish_new_book(
+        self,
+        target_epub_path: str,
+        manifest_path: str,
+        epub_path: Path,
+        manifest: BookManifest,
+        decision_value: str,
+    ) -> dict[str, str]:
+        target_write: WebDavWriteResult | None = None
+        try:
+            target_write = self.client.put_if_absent(target_epub_path, epub_path.read_bytes())
+        except ConditionalWriteFailed:
+            return self._pending_update(
+                target_epub_path,
+                epub_path,
+                manifest,
+                decision_value,
+                "target was created concurrently during conditional publish",
+            )
+        except ConditionalWriteUnsupported:
+            return self._pending_update(
+                target_epub_path,
+                epub_path,
+                manifest,
+                decision_value,
+                "new target could not be created conditionally",
+            )
+
+        try:
+            self.client.put_if_absent(manifest_path, manifest.to_json().encode("utf-8"))
+        except ConditionalWriteFailed:
+            self._safe_delete_if_match(target_epub_path, target_write.etag if target_write else None)
+            return self._pending_update(
+                target_epub_path,
+                epub_path,
+                manifest,
+                decision_value,
+                "manifest was created concurrently during conditional publish",
+            )
+        except ConditionalWriteUnsupported:
+            self._safe_delete_if_match(target_epub_path, target_write.etag if target_write else None)
+            return self._pending_update(
+                target_epub_path,
+                epub_path,
+                manifest,
+                decision_value,
+                "new manifest could not be created conditionally",
+            )
+        return {"status": "published", "path": target_epub_path}
+
+    def _publish_existing_book(
+        self,
+        target_epub_path: str,
+        manifest_path: str,
+        epub_path: Path,
+        manifest: BookManifest,
+        decision_value: str,
+        existing: _ExistingRemote,
+    ) -> dict[str, str]:
+        target_write: WebDavWriteResult | None = None
+        try:
+            target_write = self.client.put_if_match(
+                target_epub_path,
+                epub_path.read_bytes(),
+                existing.epub_etag,
+            )
+        except ConditionalWriteFailed:
+            return self._pending_update(
+                target_epub_path,
+                epub_path,
+                manifest,
+                decision_value,
+                "existing target changed during conditional publish",
+            )
+        except ConditionalWriteUnsupported:
+            return self._pending_update(
+                target_epub_path,
+                epub_path,
+                manifest,
+                decision_value,
+                "existing target could not be overwritten conditionally",
+            )
+
+        try:
+            self.client.put_if_match(
+                manifest_path,
+                manifest.to_json().encode("utf-8"),
+                existing.manifest_etag,
+            )
+        except ConditionalWriteFailed:
+            self._safe_put_if_match(
+                target_epub_path,
+                existing.epub_bytes,
+                target_write.etag if target_write else None,
+            )
+            return self._pending_update(
+                target_epub_path,
+                epub_path,
+                manifest,
+                decision_value,
+                "existing manifest changed during conditional publish",
+            )
+        except ConditionalWriteUnsupported:
+            self._safe_put_if_match(
+                target_epub_path,
+                existing.epub_bytes,
+                target_write.etag if target_write else None,
+            )
+            return self._pending_update(
+                target_epub_path,
+                epub_path,
+                manifest,
+                decision_value,
+                "existing manifest could not be overwritten conditionally",
+            )
+        except Exception:
+            self._safe_put_if_match(
+                target_epub_path,
+                existing.epub_bytes,
+                target_write.etag if target_write else None,
+            )
+            raise
+        return {"status": "published", "path": target_epub_path}
 
     def _pending_update(
         self,
@@ -182,68 +512,51 @@ class WebDavPublisher:
         if decision_value in {UpdateDecision.BLOCKED_RISKY.value, UpdateDecision.REVIEW_MINOR.value}:
             return self._pending_update(target_epub_path, epub_path, manifest, decision_value)
 
-        target_exists = self.client.exists(target_epub_path)
-        if target_exists and decision_value not in safe_overwrite_decisions:
+        try:
+            target_state = self.client.stat(target_epub_path)
+            manifest_state = self.client.stat(manifest_path)
+        except Exception:
+            return self._pending_update(
+                target_epub_path,
+                epub_path,
+                manifest,
+                decision_value,
+                "remote target state unavailable",
+            )
+
+        if target_state.exists and decision_value not in safe_overwrite_decisions:
             return self._pending_update(target_epub_path, epub_path, manifest, decision_value)
 
-        old_epub_bytes: bytes | None = None
-        old_manifest_bytes: bytes | None = None
-        had_manifest = False
-        if target_exists:
-            had_manifest = self.client.exists(manifest_path)
-            if not had_manifest:
-                return self._pending_update(
-                    target_epub_path,
-                    epub_path,
-                    manifest,
-                    decision_value,
-                    "existing target has no Hermes manifest",
-                )
-            if expected_old_epub_hash is None or expected_old_manifest_hash is None:
-                return self._pending_update(
-                    target_epub_path,
-                    epub_path,
-                    manifest,
-                    decision_value,
-                    "existing target overwrite requires expected old remote hashes",
-                )
-            try:
-                old_manifest_bytes = self.client.get(manifest_path)
-                old_epub_bytes = self.client.get(target_epub_path)
-            except Exception:
-                return self._pending_update(
-                    target_epub_path,
-                    epub_path,
-                    manifest,
-                    decision_value,
-                    "existing target or manifest unreadable",
-                )
-            current_epub_hash = hashlib.sha256(old_epub_bytes).hexdigest()
-            current_manifest_hash = hashlib.sha256(old_manifest_bytes).hexdigest()
-            if (
-                current_epub_hash != expected_old_epub_hash
-                or current_manifest_hash != expected_old_manifest_hash
-            ):
-                return self._pending_update(
-                    target_epub_path,
-                    epub_path,
-                    manifest,
-                    decision_value,
-                    "existing target changed since update diff",
-                )
-            backup_dir = self._backup_dir(target_epub_path, slug)
-            self.client.mkdir(backup_dir)
-            self.client.put(posixpath.join(backup_dir, "old.epub"), old_epub_bytes)
-            if had_manifest and old_manifest_bytes is not None:
-                self.client.put(posixpath.join(backup_dir, "old.hermes.json"), old_manifest_bytes)
+        if target_state.exists:
+            existing = self._read_existing_remote(
+                target_epub_path,
+                manifest_path,
+                target_state,
+                manifest_state,
+                expected_old_epub_hash,
+                expected_old_manifest_hash,
+            )
+            if isinstance(existing, str):
+                return self._pending_update(target_epub_path, epub_path, manifest, decision_value, existing)
+            backup_error = self._write_backup(target_epub_path, slug, existing)
+            if backup_error is not None:
+                return self._pending_update(target_epub_path, epub_path, manifest, decision_value, backup_error)
+            return self._publish_existing_book(
+                target_epub_path,
+                manifest_path,
+                epub_path,
+                manifest,
+                decision_value,
+                existing,
+            )
 
-        try:
-            self.client.put(target_epub_path, epub_path.read_bytes())
-            self.client.put(manifest_path, manifest.to_json().encode("utf-8"))
-        except Exception:
-            if target_exists and old_epub_bytes is not None:
-                self.client.put(target_epub_path, old_epub_bytes)
-                if had_manifest and old_manifest_bytes is not None:
-                    self.client.put(manifest_path, old_manifest_bytes)
-            raise
-        return {"status": "published", "path": target_epub_path}
+        if manifest_state.exists:
+            return self._pending_update(
+                target_epub_path,
+                epub_path,
+                manifest,
+                decision_value,
+                "Hermes manifest exists without target EPUB",
+            )
+
+        return self._publish_new_book(target_epub_path, manifest_path, epub_path, manifest, decision_value)

@@ -201,6 +201,111 @@ class PublishTests(unittest.TestCase):
             self.assertNotEqual(remote_manifest.read_bytes(), old_manifest_bytes)
             self.assertEqual(report["status"], "published")
 
+    def test_safe_append_concurrent_write_between_hash_check_and_put_goes_pending(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = root / "webdav"
+            (webdav / "books").mkdir(parents=True)
+            target_path = "/books/Book - Author.epub"
+            manifest_path = "/books/Book - Author.hermes.json"
+            remote_epub = webdav / "books/Book - Author.epub"
+            remote_manifest = webdav / "books/Book - Author.hermes.json"
+            old_epub_bytes = b"old-epub"
+            old_manifest_bytes = b'{"old":true}'
+            concurrent_epub_bytes = b"concurrent-epub"
+            concurrent_manifest_bytes = b'{"concurrent":true}'
+            remote_epub.write_bytes(old_epub_bytes)
+            remote_manifest.write_bytes(old_manifest_bytes)
+            epub = root / "candidate.epub"
+            epub.write_bytes(b"new-epub")
+
+            class RacingTargetPutClient(LocalWebDavClient):
+                def __init__(self, client_root):
+                    super().__init__(client_root)
+                    self.mutated = False
+
+                def _mutate_remote_once(self):
+                    if not self.mutated:
+                        self.mutated = True
+                        remote_epub.write_bytes(concurrent_epub_bytes)
+                        remote_manifest.write_bytes(concurrent_manifest_bytes)
+
+                def put(self, path, data):
+                    if path == target_path and data == b"new-epub":
+                        self._mutate_remote_once()
+                    return super().put(path, data)
+
+                def put_if_match(self, path, data, etag):
+                    if path == target_path and data == b"new-epub":
+                        self._mutate_remote_once()
+                    return super().put_if_match(path, data, etag)
+
+            publisher = WebDavPublisher(RacingTargetPutClient(webdav))
+            report = publisher.publish(
+                target_path,
+                epub,
+                manifest(UpdateDecision.SAFE_APPEND),
+                expected_old_epub_hash=sha256_bytes(old_epub_bytes),
+                expected_old_manifest_hash=sha256_bytes(old_manifest_bytes),
+            )
+
+            self.assertEqual(report["status"], "pending")
+            self.assertEqual(remote_epub.read_bytes(), concurrent_epub_bytes)
+            self.assertEqual(remote_manifest.read_bytes(), concurrent_manifest_bytes)
+            self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
+
+    def test_safe_append_rollback_does_not_overwrite_concurrent_writer_after_manifest_conflict(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = root / "webdav"
+            (webdav / "books").mkdir(parents=True)
+            target_path = "/books/Book - Author.epub"
+            manifest_path = "/books/Book - Author.hermes.json"
+            remote_epub = webdav / "books/Book - Author.epub"
+            remote_manifest = webdav / "books/Book - Author.hermes.json"
+            old_epub_bytes = b"old-epub"
+            old_manifest_bytes = b'{"old":true}'
+            concurrent_epub_bytes = b"concurrent-epub"
+            concurrent_manifest_bytes = b'{"concurrent":true}'
+            remote_epub.write_bytes(old_epub_bytes)
+            remote_manifest.write_bytes(old_manifest_bytes)
+            epub = root / "candidate.epub"
+            epub.write_bytes(b"new-epub")
+
+            class ManifestConflictAfterTargetPutClient(LocalWebDavClient):
+                def put(self, path, data):
+                    if path == target_path and data == b"new-epub":
+                        super().put(path, data)
+                        remote_epub.write_bytes(concurrent_epub_bytes)
+                        return None
+                    if path == manifest_path and data != old_manifest_bytes:
+                        remote_manifest.write_bytes(concurrent_manifest_bytes)
+                        raise RuntimeError("manifest changed concurrently")
+                    return super().put(path, data)
+
+                def put_if_match(self, path, data, etag):
+                    if path == target_path and data == b"new-epub":
+                        result = super().put_if_match(path, data, etag)
+                        remote_epub.write_bytes(concurrent_epub_bytes)
+                        return result
+                    if path == manifest_path and data != old_manifest_bytes:
+                        remote_manifest.write_bytes(concurrent_manifest_bytes)
+                    return super().put_if_match(path, data, etag)
+
+            publisher = WebDavPublisher(ManifestConflictAfterTargetPutClient(webdav))
+            report = publisher.publish(
+                target_path,
+                epub,
+                manifest(UpdateDecision.SAFE_APPEND),
+                expected_old_epub_hash=sha256_bytes(old_epub_bytes),
+                expected_old_manifest_hash=sha256_bytes(old_manifest_bytes),
+            )
+
+            self.assertEqual(report["status"], "pending")
+            self.assertEqual(remote_epub.read_bytes(), concurrent_epub_bytes)
+            self.assertEqual(remote_manifest.read_bytes(), concurrent_manifest_bytes)
+            self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
+
     def test_repeated_safe_publish_uses_timestamped_backup_directories(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -269,6 +374,18 @@ class PublishTests(unittest.TestCase):
                         raise RuntimeError("injected manifest PUT failure")
                     return super().put(path, data)
 
+                def put_if_match(self, path, data, etag):
+                    if path == "/books/Book - Author.epub" and data == b"new-epub":
+                        self.epub_put_seen = True
+                    if (
+                        path == "/books/Book - Author.hermes.json"
+                        and self.epub_put_seen
+                        and not self.failed_once
+                    ):
+                        self.failed_once = True
+                        raise RuntimeError("injected manifest PUT failure")
+                    return super().put_if_match(path, data, etag)
+
             publisher = WebDavPublisher(FailingManifestPutClient(webdav))
 
             with self.assertRaisesRegex(RuntimeError, "injected manifest PUT failure"):
@@ -308,6 +425,49 @@ class PublishTests(unittest.TestCase):
             urllib.request.urlopen = original_urlopen
 
         self.assertEqual(captured, ["https://dav.example/root/books/%E4%B9%A6%20%E5%90%8D%20%231.epub"])
+
+    def test_http_webdav_client_conditional_puts_send_precondition_headers(self):
+        captured = []
+        original_urlopen = urllib.request.urlopen
+
+        class FakeResponse:
+            headers = {"ETag": '"new-etag"'}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return b""
+
+        def fake_urlopen(req, timeout):
+            captured.append(
+                (
+                    req.get_method(),
+                    req.full_url,
+                    req.get_header("If-none-match"),
+                    req.get_header("If-match"),
+                )
+            )
+            return FakeResponse()
+
+        try:
+            urllib.request.urlopen = fake_urlopen
+            client = HttpWebDavClient("https://dav.example/root")
+            client.put_if_absent("/books/book.epub", b"new")
+            client.put_if_match("/books/book.epub", b"updated", '"old-etag"')
+        finally:
+            urllib.request.urlopen = original_urlopen
+
+        self.assertEqual(
+            captured,
+            [
+                ("PUT", "https://dav.example/root/books/book.epub", "*", None),
+                ("PUT", "https://dav.example/root/books/book.epub", None, '"old-etag"'),
+            ],
+        )
 
     def test_http_webdav_client_mkdir_creates_nested_collections(self):
         calls = []
