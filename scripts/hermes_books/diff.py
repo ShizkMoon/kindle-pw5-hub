@@ -41,6 +41,14 @@ def compare_for_update(
             new_chapter_count=new_count,
         )
 
+    if old_count == 0:
+        return UpdateDiff(
+            UpdateDecision.BLOCKED_RISKY,
+            ["old EPUB has no comparable chapters"],
+            old_chapter_count=old_count,
+            new_chapter_count=new_count,
+        )
+
     matched = 0
     changed: list[str] = []
     for idx, old_chapter in enumerate(old_inspection.chapters):
@@ -50,11 +58,16 @@ def compare_for_update(
         else:
             changed.append(f"chapter {idx + 1} fingerprint changed")
 
-    ratio = matched / old_count if old_count else 0.0
-    if ratio < fingerprint_threshold:
+    ratio = matched / old_count
+    if changed:
         return UpdateDiff(
             UpdateDecision.BLOCKED_RISKY,
-            [f"existing chapter fingerprint ratio {ratio:.2f} below {fingerprint_threshold:.2f}", *changed],
+            [
+                "existing chapter prefix changed",
+                f"existing chapter fingerprint ratio {ratio:.2f} below required 1.00",
+                f"diagnostic threshold was {fingerprint_threshold:.2f}",
+                *changed,
+            ],
             matched_existing_chapters=matched,
             old_chapter_count=old_count,
             new_chapter_count=new_count,
