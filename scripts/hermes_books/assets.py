@@ -144,13 +144,15 @@ class AssetEnricher:
                 if role == "cover"
                 else self.config.auto_insert_illustration_min_confidence
             )
+            adopted_for_role = False
             for candidate in candidates:
                 if self.config.require_source_url and not candidate.source_url:
                     report.pending.append(candidate)
                 elif role != "cover":
                     report.pending.append(candidate)
-                elif candidate.confidence >= threshold:
+                elif candidate.confidence >= threshold and not adopted_for_role:
                     report.auto_adopted.append(candidate)
+                    adopted_for_role = True
                 else:
                     report.pending.append(candidate)
         return report

@@ -60,6 +60,27 @@ class AssetTests(unittest.TestCase):
             self.assertEqual(asset_report.auto_adopted, [])
             self.assertEqual(asset_report.pending[0].confidence, 0.5)
 
+    def test_only_top_cover_candidate_is_auto_adopted(self):
+        class MultiCoverProvider:
+            def candidates(self, title: str, author: str, role: str):
+                return [
+                    AssetCandidate(role, f"https://assets.example/{idx}.jpg", Path(f"{idx}.jpg"), 1000, 1500, 0.95, str(idx))
+                    for idx in range(3)
+                ]
+
+        with tempfile.TemporaryDirectory() as td:
+            report = inspect_epub(make_epub(Path(td) / "book.epub"))
+            enricher = AssetEnricher(AssetEnrichmentConfig(mode=AssetMode.BALANCED), MultiCoverProvider())
+
+            asset_report = enricher.plan("Book", "Author", report, Path(td))
+
+            self.assertEqual(len(asset_report.auto_adopted), 1)
+            self.assertEqual(asset_report.auto_adopted[0].source_url, "https://assets.example/0.jpg")
+            self.assertEqual([candidate.source_url for candidate in asset_report.pending], [
+                "https://assets.example/1.jpg",
+                "https://assets.example/2.jpg",
+            ])
+
     def test_aggressive_illustrations_stay_pending_until_insertion_is_supported(self):
         with tempfile.TemporaryDirectory() as td:
             report = inspect_epub(make_epub(Path(td) / "book.epub"))
