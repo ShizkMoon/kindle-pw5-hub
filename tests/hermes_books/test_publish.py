@@ -93,14 +93,15 @@ class PublishTests(unittest.TestCase):
             self.assertFalse((webdav / "books/Book - Author.epub").exists())
             self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
 
-    def test_new_book_attribute_only_publish_support_still_goes_pending(self):
+    def test_new_book_supported_non_local_client_publishes_manifest_before_epub(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             webdav = root / "webdav"
             epub = root / "candidate.epub"
             epub.write_bytes(b"new-epub")
+            writes = []
 
-            class AttributeOnlyClient:
+            class SupportedHttpLikeClient:
                 supports_new_publish = True
                 supports_existing_overwrite = True
 
@@ -120,8 +121,7 @@ class PublishTests(unittest.TestCase):
                     return self.inner.put(path, data)
 
                 def put_if_absent(self, path, data):
-                    if path == "/books/Book - Author.epub":
-                        raise AssertionError("non-local client must not create live EPUB")
+                    writes.append(path)
                     return self.inner.put_if_absent(path, data)
 
                 def put_if_match(self, path, data, etag):
@@ -133,12 +133,13 @@ class PublishTests(unittest.TestCase):
                 def mkdir(self, path):
                     return self.inner.mkdir(path)
 
-            publisher = WebDavPublisher(AttributeOnlyClient(webdav))
+            publisher = WebDavPublisher(SupportedHttpLikeClient(webdav))
             report = publisher.publish("/books/Book - Author.epub", epub, manifest(UpdateDecision.NEW_BOOK))
 
-            self.assertEqual(report["status"], "pending")
-            self.assertFalse((webdav / "books/Book - Author.epub").exists())
-            self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
+            self.assertEqual(report["status"], "published")
+            self.assertEqual(writes, ["/books/Book - Author.hermes.json", "/books/Book - Author.epub"])
+            self.assertTrue((webdav / "books/Book - Author.epub").exists())
+            self.assertTrue((webdav / "books/Book - Author.hermes.json").exists())
 
     def test_risky_update_goes_to_pending_without_touching_old_book(self):
         with tempfile.TemporaryDirectory() as td:
@@ -581,6 +582,12 @@ class PublishTests(unittest.TestCase):
             urllib.request.urlopen = original_urlopen
 
         self.assertEqual(captured, ["https://dav.example/root/books/%E4%B9%A6%20%E5%90%8D%20%231.epub"])
+
+    def test_http_webdav_client_supports_verified_live_publish_paths(self):
+        client = HttpWebDavClient("https://dav.example/root")
+
+        self.assertTrue(client.supports_new_publish)
+        self.assertTrue(client.supports_existing_overwrite)
 
     def test_http_webdav_client_conditional_puts_send_precondition_headers(self):
         captured = []

@@ -155,8 +155,8 @@ class LocalWebDavClient:
 
 
 class HttpWebDavClient:
-    supports_new_publish = False
-    supports_existing_overwrite = False
+    supports_new_publish = True
+    supports_existing_overwrite = True
 
     def __init__(self, base_url: str, username: str = "", password: str = "") -> None:
         self.base_url = base_url.rstrip("/")
@@ -351,15 +351,15 @@ class WebDavPublisher:
         return bool(getattr(self.client, "supports_existing_overwrite", False))
 
     def _supports_new_publish(self) -> bool:
-        return isinstance(self.client, LocalWebDavClient) and bool(
-            getattr(self.client, "supports_new_publish", False)
-        )
+        return bool(getattr(self.client, "supports_new_publish", False))
 
-    def _verified_etag_after_write(
+    def _verified_after_write(
         self,
         path: str,
         expected_data: bytes,
         write_result: WebDavWriteResult,
+        *,
+        require_etag: bool = True,
     ) -> str | None:
         try:
             state = self.client.stat(path)
@@ -376,7 +376,17 @@ class WebDavPublisher:
             return None
         if hashlib.sha256(current_data).hexdigest() != hashlib.sha256(expected_data).hexdigest():
             return None
-        return state.etag
+        if require_etag and not state.etag:
+            return None
+        return state.etag or ""
+
+    def _verified_etag_after_write(
+        self,
+        path: str,
+        expected_data: bytes,
+        write_result: WebDavWriteResult,
+    ) -> str | None:
+        return self._verified_after_write(path, expected_data, write_result, require_etag=True)
 
     def _publish_new_book(
         self,
@@ -386,46 +396,13 @@ class WebDavPublisher:
         manifest: BookManifest,
         decision_value: str,
     ) -> dict[str, str]:
-        target_write: WebDavWriteResult | None = None
         candidate_epub = epub_path.read_bytes()
-        try:
-            target_write = self.client.put_if_absent(target_epub_path, candidate_epub)
-        except ConditionalWriteFailed:
-            return self._pending_update(
-                target_epub_path,
-                epub_path,
-                manifest,
-                decision_value,
-                "target was created concurrently during conditional publish",
-            )
-        except ConditionalWriteUnsupported:
-            return self._pending_update(
-                target_epub_path,
-                epub_path,
-                manifest,
-                decision_value,
-                "new target could not be created conditionally",
-            )
+        candidate_manifest = manifest.to_json().encode("utf-8")
 
-        target_write_etag = self._verified_etag_after_write(
-            target_epub_path,
-            candidate_epub,
-            target_write,
-        )
-        if not target_write_etag:
-            self._safe_delete_if_match(target_epub_path, target_write.etag if target_write else None)
-            return self._pending_update(
-                target_epub_path,
-                epub_path,
-                manifest,
-                decision_value,
-                "new target write could not be verified after conditional publish",
-            )
-
+        manifest_write: WebDavWriteResult | None = None
         try:
-            self.client.put_if_absent(manifest_path, manifest.to_json().encode("utf-8"))
+            manifest_write = self.client.put_if_absent(manifest_path, candidate_manifest)
         except ConditionalWriteFailed:
-            self._safe_delete_if_match(target_epub_path, target_write_etag)
             return self._pending_update(
                 target_epub_path,
                 epub_path,
@@ -434,7 +411,6 @@ class WebDavPublisher:
                 "manifest was created concurrently during conditional publish",
             )
         except ConditionalWriteUnsupported:
-            self._safe_delete_if_match(target_epub_path, target_write_etag)
             return self._pending_update(
                 target_epub_path,
                 epub_path,
@@ -443,14 +419,91 @@ class WebDavPublisher:
                 "new manifest could not be created conditionally",
             )
         except Exception:
-            self._safe_delete_if_match(target_epub_path, target_write_etag)
             return self._pending_update(
                 target_epub_path,
                 epub_path,
                 manifest,
                 decision_value,
-                "new manifest write failed after target creation",
+                "new manifest write failed before target creation",
             )
+
+        manifest_write_etag = self._verified_after_write(
+            manifest_path,
+            candidate_manifest,
+            manifest_write,
+            require_etag=False,
+        )
+        if manifest_write_etag is None:
+            self._safe_delete_if_match(manifest_path, manifest_write.etag if manifest_write else None)
+            return self._pending_update(
+                target_epub_path,
+                epub_path,
+                manifest,
+                decision_value,
+                "new manifest write could not be verified before target publish",
+            )
+
+        target_write: WebDavWriteResult | None = None
+        try:
+            target_write = self.client.put_if_absent(target_epub_path, candidate_epub)
+        except ConditionalWriteFailed:
+            self._safe_delete_if_match(manifest_path, manifest_write_etag)
+            return self._pending_update(
+                target_epub_path,
+                epub_path,
+                manifest,
+                decision_value,
+                "target was created concurrently during conditional publish",
+            )
+        except ConditionalWriteUnsupported:
+            self._safe_delete_if_match(manifest_path, manifest_write_etag)
+            return self._pending_update(
+                target_epub_path,
+                epub_path,
+                manifest,
+                decision_value,
+                "new target could not be created conditionally",
+            )
+        except Exception:
+            self._safe_delete_if_match(manifest_path, manifest_write_etag)
+            return self._pending_update(
+                target_epub_path,
+                epub_path,
+                manifest,
+                decision_value,
+                "new target write failed after manifest creation",
+            )
+
+        target_write_etag = self._verified_after_write(
+            target_epub_path,
+            candidate_epub,
+            target_write,
+            require_etag=False,
+        )
+        if target_write_etag is None:
+            self._safe_delete_if_match(target_epub_path, target_write.etag if target_write else None)
+            self._safe_delete_if_match(manifest_path, manifest_write_etag)
+            return self._pending_update(
+                target_epub_path,
+                epub_path,
+                manifest,
+                decision_value,
+                "new target write could not be verified after manifest publish",
+            )
+
+        if target_write_etag and manifest_write_etag:
+            final_target = self.client.stat(target_epub_path)
+            final_manifest = self.client.stat(manifest_path)
+            if final_target.etag != target_write_etag or final_manifest.etag != manifest_write_etag:
+                self._safe_delete_if_match(target_epub_path, target_write_etag)
+                self._safe_delete_if_match(manifest_path, manifest_write_etag)
+                return self._pending_update(
+                    target_epub_path,
+                    epub_path,
+                    manifest,
+                    decision_value,
+                    "new target changed before publish verification completed",
+                )
         return {"status": "published", "path": target_epub_path}
 
     def _publish_existing_book(
