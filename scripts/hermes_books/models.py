@@ -100,6 +100,7 @@ class ChapterInfo:
     text_chars: int
     item_id: str = ""
     structure_fingerprint: str = ""
+    resource_fingerprint: str = ""
 
 
 @dataclass

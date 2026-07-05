@@ -109,8 +109,8 @@ class _ReaderBodyParser(HTMLParser):
     def _structure_tag(self, tag: str, attrs: list[tuple[str, str | None]]) -> str:
         anchors = []
         for key, value in attrs:
-            if key and key.lower() in {"id", "name"} and value:
-                anchors.append(f'{key.lower()}="{value.strip()}"')
+            if key and key.lower() in {"id", "name", "src", "href"} and value:
+                anchors.append(f'{key.lower()}="{_normalise_epub_href(value.strip())}"')
         return " ".join([tag, *anchors])
 
 
@@ -256,11 +256,71 @@ def _spine_item_id(entry: Any) -> str:
     return _string_value(getattr(entry, "id", ""))
 
 
-def _chapter_info(index: int, item: epub.EpubItem, item_id: str) -> ChapterInfo:
+def _resource_references(raw_html: bytes) -> list[str]:
+    class ReferenceParser(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__(convert_charrefs=True)
+            self.references: list[str] = []
+
+        def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            self._collect(attrs)
+
+        def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            self._collect(attrs)
+
+        def _collect(self, attrs: list[tuple[str, str | None]]) -> None:
+            for key, value in attrs:
+                if key and key.lower() in {"src", "href"} and value:
+                    if value.startswith("#"):
+                        continue
+                    self.references.append(value)
+
+    parser = ReferenceParser()
+    parser.feed(raw_html.decode("utf-8", errors="replace"))
+    parser.close()
+    return parser.references
+
+
+def _resource_fingerprint(item: epub.EpubItem, resources_by_href: dict[str, epub.EpubItem]) -> str:
+    chapter_dir = posixpath.dirname(_normalise_epub_href(str(getattr(item, "file_name", ""))))
+    parts: list[str] = []
+    for raw_reference in sorted(set(_resource_references(item.get_content()))):
+        if raw_reference.startswith(("http://", "https://", "mailto:")):
+            parts.append(f"external:{raw_reference}")
+            continue
+        normalised = _normalise_epub_href(posixpath.join(chapter_dir, raw_reference))
+        referenced = resources_by_href.get(normalised)
+        if referenced is None:
+            parts.append(f"missing:{normalised}")
+            continue
+        media_type = str(getattr(referenced, "media_type", ""))
+        if media_type == "application/xhtml+xml" or media_type == "text/css":
+            continue
+        content = referenced.get_content()
+        parts.append(f"{normalised}:{media_type}:{hashlib.sha256(content).hexdigest()}")
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+def _chapter_info(
+    index: int,
+    item: epub.EpubItem,
+    item_id: str,
+    resources_by_href: dict[str, epub.EpubItem],
+) -> ChapterInfo:
     href = str(getattr(item, "file_name", ""))
     fingerprint, text_chars, structure_fingerprint = _fingerprint(item.get_content())
+    resource_fingerprint = _resource_fingerprint(item, resources_by_href)
     title = _string_value(getattr(item, "title", "")) or href
-    return ChapterInfo(index, title, href, fingerprint, text_chars, item_id, structure_fingerprint)
+    return ChapterInfo(
+        index,
+        title,
+        href,
+        fingerprint,
+        text_chars,
+        item_id,
+        structure_fingerprint,
+        resource_fingerprint,
+    )
 
 
 def _spine_ordered_document_items(book: epub.EpubBook) -> list[tuple[epub.EpubItem, str]]:
@@ -300,8 +360,13 @@ def inspect_epub(path: Path) -> EpubInspection:
         opf_identifier=_metadata_first(book, "DC", "identifier", ""),
     )
 
+    resources_by_href = {
+        _normalise_epub_href(str(getattr(item, "file_name", ""))): item
+        for item in book.get_items()
+        if str(getattr(item, "file_name", ""))
+    }
     for chapter_index, (item, item_id) in enumerate(_spine_ordered_document_items(book), start=1):
-        report.chapters.append(_chapter_info(chapter_index, item, item_id))
+        report.chapters.append(_chapter_info(chapter_index, item, item_id, resources_by_href))
 
     cover_item_ids = _cover_item_ids(book)
     epub3_cover_ids, epub3_cover_hrefs = _epub3_cover_references(path)

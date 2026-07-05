@@ -23,6 +23,24 @@ def rewrite_chapter(epub_path: Path, chapter_path: str, replace: tuple[str, str]
             target.writestr(name, content)
 
 
+def add_image(epub_path: Path, href: str, data: bytes) -> None:
+    with zipfile.ZipFile(epub_path, "r") as source:
+        entries = {name: source.read(name) for name in source.namelist()}
+
+    opf_path = "EPUB/content.opf"
+    opf = entries[opf_path].decode("utf-8")
+    item_id = Path(href).stem.replace("-", "_")
+    item = f'<item href="{href}" id="{item_id}" media-type="image/jpeg" />'
+    if item not in opf:
+        opf = opf.replace("</manifest>", f"    {item}\n  </manifest>")
+    entries[opf_path] = opf.encode("utf-8")
+    entries[f"EPUB/{href}"] = data
+
+    with zipfile.ZipFile(epub_path, "w") as target:
+        for name, content in entries.items():
+            target.writestr(name, content)
+
+
 def manifest(title="Book", author="Author"):
     return BookManifest(
         canonical_id="book::author",
@@ -221,6 +239,56 @@ class DiffTests(unittest.TestCase):
 
             self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
             self.assertIn("chapter 1 structure changed", result.reasons)
+
+    def test_same_text_with_changed_image_reference_is_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            old_path = make_epub(root / "old.epub", chapters=[("第一章", "same body")])
+            new_path = make_epub(root / "new.epub", chapters=[("第一章", "same body")])
+            add_image(old_path, "images/old.jpg", b"old image")
+            add_image(new_path, "images/new.jpg", b"old image")
+            rewrite_chapter(old_path, "chapters/ch0001.xhtml", ("</p>", '</p><img src="../images/old.jpg"/>'))
+            rewrite_chapter(new_path, "chapters/ch0001.xhtml", ("</p>", '</p><img src="../images/new.jpg"/>'))
+            old = inspect_epub(old_path)
+            new = inspect_epub(new_path)
+
+            self.assertEqual(old.chapters[0].fingerprint, new.chapters[0].fingerprint)
+            self.assertNotEqual(
+                old.chapters[0].structure_fingerprint,
+                new.chapters[0].structure_fingerprint,
+            )
+
+            result = compare_for_update(manifest(), manifest(), old, new)
+
+            self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
+            self.assertIn("chapter 1 structure changed", result.reasons)
+
+    def test_same_text_with_changed_image_bytes_is_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            old_path = make_epub(root / "old.epub", chapters=[("第一章", "same body")])
+            new_path = make_epub(root / "new.epub", chapters=[("第一章", "same body")])
+            add_image(old_path, "images/plate.jpg", b"old image")
+            add_image(new_path, "images/plate.jpg", b"new image")
+            rewrite_chapter(old_path, "chapters/ch0001.xhtml", ("</p>", '</p><img src="../images/plate.jpg"/>'))
+            rewrite_chapter(new_path, "chapters/ch0001.xhtml", ("</p>", '</p><img src="../images/plate.jpg"/>'))
+            old = inspect_epub(old_path)
+            new = inspect_epub(new_path)
+
+            self.assertEqual(old.chapters[0].fingerprint, new.chapters[0].fingerprint)
+            self.assertEqual(
+                old.chapters[0].structure_fingerprint,
+                new.chapters[0].structure_fingerprint,
+            )
+            self.assertNotEqual(
+                old.chapters[0].resource_fingerprint,
+                new.chapters[0].resource_fingerprint,
+            )
+
+            result = compare_for_update(manifest(), manifest(), old, new)
+
+            self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
+            self.assertIn("chapter 1 resources changed", result.reasons)
 
 
 if __name__ == "__main__":
