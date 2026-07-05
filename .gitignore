@@ -11,6 +11,7 @@ Desktop.ini
 *.tmp
 *.log
 ~$*
+.worktrees/
 
 # Python
 __pycache__/
