@@ -100,6 +100,46 @@ class PublishTests(unittest.TestCase):
             self.assertEqual((second / "old.epub").read_bytes(), b"old-two")
             self.assertEqual((second / "old.hermes.json").read_bytes(), b'{"old":2}')
 
+    def test_safe_overwrite_restores_old_files_when_manifest_put_fails(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = root / "webdav"
+            (webdav / "books").mkdir(parents=True)
+            remote_epub = webdav / "books/Book - Author.epub"
+            remote_manifest = webdav / "books/Book - Author.hermes.json"
+            old_epub_bytes = b"old-epub"
+            old_manifest_bytes = b'{"old":true}'
+            remote_epub.write_bytes(old_epub_bytes)
+            remote_manifest.write_bytes(old_manifest_bytes)
+            epub = root / "candidate.epub"
+            epub.write_bytes(b"new-epub")
+
+            class FailingManifestPutClient(LocalWebDavClient):
+                def __init__(self, client_root):
+                    super().__init__(client_root)
+                    self.epub_put_seen = False
+                    self.failed_once = False
+
+                def put(self, path, data):
+                    if path == "/books/Book - Author.epub" and data == b"new-epub":
+                        self.epub_put_seen = True
+                    if (
+                        path == "/books/Book - Author.hermes.json"
+                        and self.epub_put_seen
+                        and not self.failed_once
+                    ):
+                        self.failed_once = True
+                        raise RuntimeError("injected manifest PUT failure")
+                    return super().put(path, data)
+
+            publisher = WebDavPublisher(FailingManifestPutClient(webdav))
+
+            with self.assertRaisesRegex(RuntimeError, "injected manifest PUT failure"):
+                publisher.publish("/books/Book - Author.epub", epub, manifest(UpdateDecision.SAFE_APPEND))
+
+            self.assertEqual(remote_epub.read_bytes(), old_epub_bytes)
+            self.assertEqual(remote_manifest.read_bytes(), old_manifest_bytes)
+
     def test_http_webdav_client_quotes_path_segments(self):
         captured = []
         original_urlopen = urllib.request.urlopen

@@ -94,8 +94,8 @@ scripts/
 本地 TXT 或 EPUB 可以通过 Hermes intake 管线进入统一 EPUB3 处理流程：
 
 ```powershell
-python scripts/hermes_books/intake.py "D:\Books\raw.txt" -t "书名" -a "作者" --config config/hermes-books.yaml
-python scripts/hermes_books/intake.py "D:\Books\raw.epub" -t "书名" -a "作者" --config config/hermes-books.yaml
+python -m scripts.hermes_books.intake "D:\Books\raw.txt" -t "书名" -a "作者" --config config/hermes-books.yaml
+python -m scripts.hermes_books.intake "D:\Books\raw.epub" -t "书名" -a "作者" --config config/hermes-books.yaml
 ```
 
 管线会在 `runs/<job-id>/` 下保留 raw、draft、normalized 和 reports。发布到 WebDAV 前会执行 append-safe 检查：旧章节稳定且只追加新章时覆盖 `/books/书名 - 作者.epub`，风险更新进入 `/books/.pending/`。

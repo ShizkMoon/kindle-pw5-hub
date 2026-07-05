@@ -169,13 +169,27 @@ class WebDavPublisher:
         if target_exists and decision_value not in safe_overwrite_decisions:
             return self._pending_update(target_epub_path, epub_path, manifest, decision_value)
 
+        old_epub_bytes: bytes | None = None
+        old_manifest_bytes: bytes | None = None
+        had_manifest = False
         if target_exists:
+            old_epub_bytes = self.client.get(target_epub_path)
+            had_manifest = self.client.exists(manifest_path)
+            if had_manifest:
+                old_manifest_bytes = self.client.get(manifest_path)
             backup_dir = self._backup_dir(target_epub_path, slug)
             self.client.mkdir(backup_dir)
-            self.client.put(posixpath.join(backup_dir, "old.epub"), self.client.get(target_epub_path))
-            if self.client.exists(manifest_path):
-                self.client.put(posixpath.join(backup_dir, "old.hermes.json"), self.client.get(manifest_path))
+            self.client.put(posixpath.join(backup_dir, "old.epub"), old_epub_bytes)
+            if had_manifest and old_manifest_bytes is not None:
+                self.client.put(posixpath.join(backup_dir, "old.hermes.json"), old_manifest_bytes)
 
-        self.client.put(target_epub_path, epub_path.read_bytes())
-        self.client.put(manifest_path, manifest.to_json().encode("utf-8"))
+        try:
+            self.client.put(target_epub_path, epub_path.read_bytes())
+            self.client.put(manifest_path, manifest.to_json().encode("utf-8"))
+        except Exception:
+            if target_exists and old_epub_bytes is not None:
+                self.client.put(target_epub_path, old_epub_bytes)
+                if had_manifest and old_manifest_bytes is not None:
+                    self.client.put(manifest_path, old_manifest_bytes)
+            raise
         return {"status": "published", "path": target_epub_path}

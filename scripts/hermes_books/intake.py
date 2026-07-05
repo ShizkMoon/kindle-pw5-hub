@@ -215,15 +215,16 @@ def run_intake(
     validation = (epub_validator or _default_epub_validator)(output_epub)
     (paths.reports_dir / "epubcheck.json").write_text(validation.to_json(), encoding="utf-8")
 
-    if config.pipeline.require_epubcheck and validation.errors:
+    if config.pipeline.require_epubcheck and validation.status != "passed":
         decision = UpdateDecision.BLOCKED_RISKY
         manifest = _manifest_from_inspection(job, snapshot.source_hash, output_epub, inspection, decision)
         manifest.asset_report = asset_report_data
         (paths.reports_dir / "manifest.json").write_text(manifest.to_json(), encoding="utf-8")
+        reason = f"EPUBCheck validation status {validation.status}"
         publish_report = {
             "status": "blocked",
             "path": job.webdav_target_path,
-            "reason": "EPUBCheck validation errors",
+            "reason": reason,
         }
         (paths.reports_dir / "publish-report.json").write_text(
             json.dumps(publish_report, ensure_ascii=False, indent=2),
@@ -269,33 +270,42 @@ def run_intake(
             )
         else:
             old_epub = paths.raw_dir / "old-remote.epub"
-            old_epub.write_bytes(webdav_client.get(job.webdav_target_path))
-            old_inspection = inspect_epub(old_epub)
-            diff = compare_for_update(
-                old_manifest,
-                candidate_manifest,
-                old_inspection,
-                inspection,
-                config.update_policy.chapter_fingerprint_threshold,
-            )
-            decision = diff.decision
-            reasons = list(diff.reasons)
-            identifiers = {
-                old_manifest.opf_identifier,
-                old_inspection.opf_identifier,
-                candidate_manifest.opf_identifier,
-            }
-            if len(identifiers) != 1:
+            try:
+                old_epub.write_bytes(webdav_client.get(job.webdav_target_path))
+                old_inspection = inspect_epub(old_epub)
+            except Exception as exc:
                 decision = UpdateDecision.BLOCKED_RISKY
-                reasons.append("OPF identifier mismatch for existing remote book")
-            _write_update_diff_report(
-                paths.reports_dir / "update-diff.md",
-                decision,
-                reasons,
-                diff.matched_existing_chapters,
-                diff.old_chapter_count,
-                diff.new_chapter_count,
-            )
+                _write_update_diff_report(
+                    paths.reports_dir / "update-diff.md",
+                    decision,
+                    [f"remote EPUB unreadable: {exc}"],
+                )
+            else:
+                diff = compare_for_update(
+                    old_manifest,
+                    candidate_manifest,
+                    old_inspection,
+                    inspection,
+                    config.update_policy.chapter_fingerprint_threshold,
+                )
+                decision = diff.decision
+                reasons = list(diff.reasons)
+                identifiers = {
+                    old_manifest.opf_identifier,
+                    old_inspection.opf_identifier,
+                    candidate_manifest.opf_identifier,
+                }
+                if len(identifiers) != 1:
+                    decision = UpdateDecision.BLOCKED_RISKY
+                    reasons.append("OPF identifier mismatch for existing remote book")
+                _write_update_diff_report(
+                    paths.reports_dir / "update-diff.md",
+                    decision,
+                    reasons,
+                    diff.matched_existing_chapters,
+                    diff.old_chapter_count,
+                    diff.new_chapter_count,
+                )
 
     manifest = _manifest_from_inspection(job, snapshot.source_hash, output_epub, inspection, decision)
     manifest.asset_report = asset_report_data
