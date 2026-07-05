@@ -368,7 +368,7 @@ class WebDavPublisher:
         if write_result.etag:
             return write_result.etag if state.exists and state.etag == write_result.etag else None
 
-        if not state.exists or not state.etag:
+        if not state.exists or (require_etag and not state.etag):
             return None
         try:
             current_data = self.client.get(path)

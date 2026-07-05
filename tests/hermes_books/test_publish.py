@@ -6,7 +6,14 @@ import urllib.request
 from pathlib import Path
 
 from scripts.hermes_books.models import BookManifest, UpdateDecision
-from scripts.hermes_books.publish import HttpWebDavClient, LocalWebDavClient, WebDavPublisher
+from scripts.hermes_books.publish import (
+    ConditionalWriteFailed,
+    HttpWebDavClient,
+    LocalWebDavClient,
+    WebDavResource,
+    WebDavWriteResult,
+    WebDavPublisher,
+)
 
 
 def manifest(decision):
@@ -138,6 +145,35 @@ class PublishTests(unittest.TestCase):
 
             self.assertEqual(report["status"], "published")
             self.assertEqual(writes, ["/books/Book - Author.hermes.json", "/books/Book - Author.epub"])
+            self.assertTrue((webdav / "books/Book - Author.epub").exists())
+            self.assertTrue((webdav / "books/Book - Author.hermes.json").exists())
+
+    def test_new_book_supported_client_without_etags_publishes_after_readback_verification(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = root / "webdav"
+            epub = root / "candidate.epub"
+            epub.write_bytes(b"new-epub")
+
+            class CleanNoEtagNewPublishClient(LocalWebDavClient):
+                supports_new_publish = True
+
+                def stat(self, path):
+                    state = super().stat(path)
+                    return WebDavResource(state.exists, None)
+
+                def put_if_absent(self, path, data):
+                    target = self._path(path)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    if target.exists():
+                        raise ConditionalWriteFailed(f"{path} already exists")
+                    target.write_bytes(data)
+                    return WebDavWriteResult(None)
+
+            publisher = WebDavPublisher(CleanNoEtagNewPublishClient(webdav))
+            report = publisher.publish("/books/Book - Author.epub", epub, manifest(UpdateDecision.NEW_BOOK))
+
+            self.assertEqual(report["status"], "published")
             self.assertTrue((webdav / "books/Book - Author.epub").exists())
             self.assertTrue((webdav / "books/Book - Author.hermes.json").exists())
 
