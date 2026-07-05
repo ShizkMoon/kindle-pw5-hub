@@ -1,3 +1,4 @@
+import hashlib
 import tempfile
 import unittest
 import urllib.error
@@ -18,6 +19,10 @@ def manifest(decision):
         output_hash="o",
         update_decision=decision,
     )
+
+
+def sha256_bytes(data):
+    return hashlib.sha256(data).hexdigest()
 
 
 class PublishTests(unittest.TestCase):
@@ -119,6 +124,83 @@ class PublishTests(unittest.TestCase):
             self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
             self.assertEqual(report["status"], "pending")
 
+    def test_safe_append_existing_target_without_expected_hashes_goes_pending_without_touching_old_book(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = root / "webdav"
+            (webdav / "books").mkdir(parents=True)
+            remote_epub = webdav / "books/Book - Author.epub"
+            remote_manifest = webdav / "books/Book - Author.hermes.json"
+            old_epub_bytes = b"old-epub"
+            old_manifest_bytes = b'{"old":true}'
+            remote_epub.write_bytes(old_epub_bytes)
+            remote_manifest.write_bytes(old_manifest_bytes)
+            epub = root / "candidate.epub"
+            epub.write_bytes(b"new-epub")
+
+            publisher = WebDavPublisher(LocalWebDavClient(webdav))
+            report = publisher.publish("/books/Book - Author.epub", epub, manifest(UpdateDecision.SAFE_APPEND))
+
+            self.assertEqual(remote_epub.read_bytes(), old_epub_bytes)
+            self.assertEqual(remote_manifest.read_bytes(), old_manifest_bytes)
+            self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
+            self.assertEqual(report["status"], "pending")
+
+    def test_safe_append_existing_target_with_expected_hash_mismatch_goes_pending_without_touching_old_book(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = root / "webdav"
+            (webdav / "books").mkdir(parents=True)
+            remote_epub = webdav / "books/Book - Author.epub"
+            remote_manifest = webdav / "books/Book - Author.hermes.json"
+            old_epub_bytes = b"old-epub"
+            old_manifest_bytes = b'{"old":true}'
+            remote_epub.write_bytes(old_epub_bytes)
+            remote_manifest.write_bytes(old_manifest_bytes)
+            epub = root / "candidate.epub"
+            epub.write_bytes(b"new-epub")
+
+            publisher = WebDavPublisher(LocalWebDavClient(webdav))
+            report = publisher.publish(
+                "/books/Book - Author.epub",
+                epub,
+                manifest(UpdateDecision.SAFE_APPEND),
+                expected_old_epub_hash=sha256_bytes(b"different-epub"),
+                expected_old_manifest_hash=sha256_bytes(old_manifest_bytes),
+            )
+
+            self.assertEqual(remote_epub.read_bytes(), old_epub_bytes)
+            self.assertEqual(remote_manifest.read_bytes(), old_manifest_bytes)
+            self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
+            self.assertEqual(report["status"], "pending")
+
+    def test_safe_append_existing_target_with_matching_expected_hashes_still_publishes(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = root / "webdav"
+            (webdav / "books").mkdir(parents=True)
+            remote_epub = webdav / "books/Book - Author.epub"
+            remote_manifest = webdav / "books/Book - Author.hermes.json"
+            old_epub_bytes = b"old-epub"
+            old_manifest_bytes = b'{"old":true}'
+            remote_epub.write_bytes(old_epub_bytes)
+            remote_manifest.write_bytes(old_manifest_bytes)
+            epub = root / "candidate.epub"
+            epub.write_bytes(b"new-epub")
+
+            publisher = WebDavPublisher(LocalWebDavClient(webdav))
+            report = publisher.publish(
+                "/books/Book - Author.epub",
+                epub,
+                manifest(UpdateDecision.SAFE_APPEND),
+                expected_old_epub_hash=sha256_bytes(old_epub_bytes),
+                expected_old_manifest_hash=sha256_bytes(old_manifest_bytes),
+            )
+
+            self.assertEqual(remote_epub.read_bytes(), b"new-epub")
+            self.assertNotEqual(remote_manifest.read_bytes(), old_manifest_bytes)
+            self.assertEqual(report["status"], "published")
+
     def test_repeated_safe_publish_uses_timestamped_backup_directories(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -131,10 +213,22 @@ class PublishTests(unittest.TestCase):
             timestamps = iter(["20260706T010203Z", "20260706T010204Z"])
 
             publisher = WebDavPublisher(LocalWebDavClient(webdav), timestamp=lambda: next(timestamps))
-            publisher.publish("/books/Book - Author.epub", epub, manifest(UpdateDecision.SAFE_APPEND))
+            publisher.publish(
+                "/books/Book - Author.epub",
+                epub,
+                manifest(UpdateDecision.SAFE_APPEND),
+                expected_old_epub_hash=sha256_bytes(b"old-one"),
+                expected_old_manifest_hash=sha256_bytes(b'{"old":1}'),
+            )
             (webdav / "books/Book - Author.epub").write_bytes(b"old-two")
             (webdav / "books/Book - Author.hermes.json").write_bytes(b'{"old":2}')
-            publisher.publish("/books/Book - Author.epub", epub, manifest(UpdateDecision.SAFE_APPEND))
+            publisher.publish(
+                "/books/Book - Author.epub",
+                epub,
+                manifest(UpdateDecision.SAFE_APPEND),
+                expected_old_epub_hash=sha256_bytes(b"old-two"),
+                expected_old_manifest_hash=sha256_bytes(b'{"old":2}'),
+            )
 
             first = webdav / "books/.backups/Book - Author/20260706T010203Z"
             second = webdav / "books/.backups/Book - Author/20260706T010204Z"
@@ -178,7 +272,13 @@ class PublishTests(unittest.TestCase):
             publisher = WebDavPublisher(FailingManifestPutClient(webdav))
 
             with self.assertRaisesRegex(RuntimeError, "injected manifest PUT failure"):
-                publisher.publish("/books/Book - Author.epub", epub, manifest(UpdateDecision.SAFE_APPEND))
+                publisher.publish(
+                    "/books/Book - Author.epub",
+                    epub,
+                    manifest(UpdateDecision.SAFE_APPEND),
+                    expected_old_epub_hash=sha256_bytes(old_epub_bytes),
+                    expected_old_manifest_hash=sha256_bytes(old_manifest_bytes),
+                )
 
             self.assertEqual(remote_epub.read_bytes(), old_epub_bytes)
             self.assertEqual(remote_manifest.read_bytes(), old_manifest_bytes)

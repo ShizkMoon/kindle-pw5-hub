@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from collections.abc import Callable
 from datetime import datetime, timezone
+import hashlib
 import posixpath
 import urllib.error
 from urllib.parse import quote
@@ -140,6 +141,7 @@ class WebDavPublisher:
         epub_path: Path,
         manifest: BookManifest,
         decision_value: str,
+        reason: str | None = None,
     ) -> dict[str, str]:
         slug = Path(target_epub_path).stem
         pending_dir = posixpath.join(posixpath.dirname(target_epub_path), ".pending", slug)
@@ -151,11 +153,26 @@ class WebDavPublisher:
         )
         self.client.put(
             posixpath.join(pending_dir, "risk-report.md"),
-            f"# Pending update\n\nDecision: {decision_value}\n".encode("utf-8"),
+            (
+                "# Pending update\n\n"
+                f"Decision: {decision_value}\n"
+                + (f"Reason: {reason}\n" if reason else "")
+            ).encode("utf-8"),
         )
-        return {"status": "pending", "path": pending_dir}
+        report = {"status": "pending", "path": pending_dir}
+        if reason:
+            report["reason"] = reason
+        return report
 
-    def publish(self, target_epub_path: str, epub_path: Path, manifest: BookManifest) -> dict[str, str]:
+    def publish(
+        self,
+        target_epub_path: str,
+        epub_path: Path,
+        manifest: BookManifest,
+        *,
+        expected_old_epub_hash: str | None = None,
+        expected_old_manifest_hash: str | None = None,
+    ) -> dict[str, str]:
         slug = Path(target_epub_path).stem
         manifest_path = target_epub_path[:-5] + ".hermes.json"
         decision = manifest.update_decision
@@ -175,12 +192,45 @@ class WebDavPublisher:
         if target_exists:
             had_manifest = self.client.exists(manifest_path)
             if not had_manifest:
-                return self._pending_update(target_epub_path, epub_path, manifest, decision_value)
+                return self._pending_update(
+                    target_epub_path,
+                    epub_path,
+                    manifest,
+                    decision_value,
+                    "existing target has no Hermes manifest",
+                )
+            if expected_old_epub_hash is None or expected_old_manifest_hash is None:
+                return self._pending_update(
+                    target_epub_path,
+                    epub_path,
+                    manifest,
+                    decision_value,
+                    "existing target overwrite requires expected old remote hashes",
+                )
             try:
                 old_manifest_bytes = self.client.get(manifest_path)
+                old_epub_bytes = self.client.get(target_epub_path)
             except Exception:
-                return self._pending_update(target_epub_path, epub_path, manifest, decision_value)
-            old_epub_bytes = self.client.get(target_epub_path)
+                return self._pending_update(
+                    target_epub_path,
+                    epub_path,
+                    manifest,
+                    decision_value,
+                    "existing target or manifest unreadable",
+                )
+            current_epub_hash = hashlib.sha256(old_epub_bytes).hexdigest()
+            current_manifest_hash = hashlib.sha256(old_manifest_bytes).hexdigest()
+            if (
+                current_epub_hash != expected_old_epub_hash
+                or current_manifest_hash != expected_old_manifest_hash
+            ):
+                return self._pending_update(
+                    target_epub_path,
+                    epub_path,
+                    manifest,
+                    decision_value,
+                    "existing target changed since update diff",
+                )
             backup_dir = self._backup_dir(target_epub_path, slug)
             self.client.mkdir(backup_dir)
             self.client.put(posixpath.join(backup_dir, "old.epub"), old_epub_bytes)

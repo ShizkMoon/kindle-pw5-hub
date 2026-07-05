@@ -108,6 +108,57 @@ class IntakeTests(unittest.TestCase):
             self.assertTrue((result.reports_dir / "update-diff.md").exists())
             self.assertEqual(result.manifest.update_decision, UpdateDecision.SAFE_APPEND)
 
+    def test_existing_remote_mutated_after_diff_goes_pending_without_overwriting_mutation(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav_root = root / "webdav"
+            old_epub = make_epub(
+                root / "old.epub",
+                chapters=[("第一章", "第一章正文")],
+            )
+            new_epub = make_epub(
+                root / "new.epub",
+                chapters=[("第一章", "第一章正文"), ("第二章", "第二章正文")],
+            )
+
+            run_intake(
+                input_path=old_epub,
+                title="Book",
+                author="Author",
+                runs_root=root / "old-runs",
+                config=no_network_config(),
+                webdav_client=LocalWebDavClient(webdav_root),
+            )
+            remote_epub = webdav_root / "books/Book - Author.epub"
+            mutated_remote_bytes = b"changed after append-safe diff"
+
+            class MutatingAfterDiffReadClient(LocalWebDavClient):
+                def __init__(self, client_root):
+                    super().__init__(client_root)
+                    self.mutated = False
+
+                def get(self, path):
+                    data = super().get(path)
+                    if path == "/books/Book - Author.epub" and not self.mutated:
+                        self.mutated = True
+                        remote_epub.write_bytes(mutated_remote_bytes)
+                    return data
+
+            result = run_intake(
+                input_path=new_epub,
+                title="Book",
+                author="Author",
+                runs_root=root / "new-runs",
+                config=no_network_config(),
+                webdav_client=MutatingAfterDiffReadClient(webdav_root),
+            )
+
+            self.assertEqual(result.manifest.update_decision, UpdateDecision.SAFE_APPEND)
+            self.assertEqual(result.publish_report["status"], "pending")
+            self.assertEqual(remote_epub.read_bytes(), mutated_remote_bytes)
+            self.assertNotEqual(remote_epub.read_bytes(), result.output_epub.read_bytes())
+            self.assertTrue((webdav_root / "books/.pending/Book - Author/candidate.epub").exists())
+
     def test_existing_remote_epub_without_manifest_goes_pending(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

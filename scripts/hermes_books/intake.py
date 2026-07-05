@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import posixpath
@@ -244,6 +245,8 @@ def run_intake(
     manifest_path = _manifest_path(job.webdav_target_path)
     target_exists = webdav_client.exists(job.webdav_target_path)
     manifest_exists = webdav_client.exists(manifest_path)
+    expected_old_epub_hash: str | None = None
+    expected_old_manifest_hash: str | None = None
     candidate_manifest = _manifest_from_inspection(
         job,
         snapshot.source_hash,
@@ -260,7 +263,8 @@ def run_intake(
         )
     elif target_exists and manifest_exists:
         try:
-            old_manifest = BookManifest.from_json(webdav_client.get(manifest_path).decode("utf-8"))
+            old_manifest_bytes = webdav_client.get(manifest_path)
+            old_manifest = BookManifest.from_json(old_manifest_bytes.decode("utf-8"))
         except Exception:
             decision = UpdateDecision.BLOCKED_RISKY
             _write_update_diff_report(
@@ -271,7 +275,10 @@ def run_intake(
         else:
             old_epub = paths.raw_dir / "old-remote.epub"
             try:
-                old_epub.write_bytes(webdav_client.get(job.webdav_target_path))
+                old_epub_bytes = webdav_client.get(job.webdav_target_path)
+                expected_old_manifest_hash = hashlib.sha256(old_manifest_bytes).hexdigest()
+                expected_old_epub_hash = hashlib.sha256(old_epub_bytes).hexdigest()
+                old_epub.write_bytes(old_epub_bytes)
                 old_inspection = inspect_epub(old_epub)
             except Exception as exc:
                 decision = UpdateDecision.BLOCKED_RISKY
@@ -311,7 +318,13 @@ def run_intake(
     manifest.asset_report = asset_report_data
     (paths.reports_dir / "manifest.json").write_text(manifest.to_json(), encoding="utf-8")
 
-    publish_report = WebDavPublisher(webdav_client).publish(job.webdav_target_path, output_epub, manifest)
+    publish_report = WebDavPublisher(webdav_client).publish(
+        job.webdav_target_path,
+        output_epub,
+        manifest,
+        expected_old_epub_hash=expected_old_epub_hash,
+        expected_old_manifest_hash=expected_old_manifest_hash,
+    )
     (paths.reports_dir / "publish-report.json").write_text(
         json.dumps(publish_report, ensure_ascii=False, indent=2),
         encoding="utf-8",
