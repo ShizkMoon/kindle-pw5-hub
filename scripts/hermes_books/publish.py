@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 import hashlib
 import posixpath
 import urllib.error
+import uuid
 from urllib.parse import quote
 import urllib.request
 from pathlib import Path
@@ -350,6 +351,28 @@ class WebDavPublisher:
     def _supports_existing_overwrite(self) -> bool:
         return bool(getattr(self.client, "supports_existing_overwrite", False))
 
+    def _existing_overwrite_capability_error(self, target_epub_path: str) -> str | None:
+        if isinstance(self.client, LocalWebDavClient):
+            return None
+
+        probe_dir = posixpath.join(posixpath.dirname(target_epub_path), ".hermes-capabilities")
+        probe_path = posixpath.join(probe_dir, f"{uuid.uuid4().hex}.probe")
+        try:
+            self.client.mkdir(probe_dir)
+            first = self.client.put_if_absent(probe_path, b"probe-1")
+            if not first.etag:
+                return "existing target overwrite requires WebDAV PUT response ETags"
+            second = self.client.put_if_match(probe_path, b"probe-2", first.etag)
+            if not second.etag:
+                return "existing target overwrite requires WebDAV PUT response ETags"
+            verified = self._verified_etag_after_write(probe_path, b"probe-2", second)
+            if not verified:
+                return "existing target overwrite probe could not be verified"
+            self._safe_delete_if_match(probe_path, verified)
+            return None
+        except Exception:
+            return "existing target overwrite probe failed"
+
     def _supports_new_publish(self) -> bool:
         return bool(getattr(self.client, "supports_new_publish", False))
 
@@ -556,6 +579,11 @@ class WebDavPublisher:
             target_write,
         )
         if not target_write_etag:
+            self._safe_put_if_match(
+                target_epub_path,
+                existing.epub_bytes,
+                target_write.etag if target_write else None,
+            )
             return self._pending_update(
                 target_epub_path,
                 epub_path,
@@ -704,6 +732,15 @@ class WebDavPublisher:
                     manifest,
                     decision_value,
                     "existing target overwrite requires transactional WebDAV support",
+                )
+            capability_error = self._existing_overwrite_capability_error(target_epub_path)
+            if capability_error is not None:
+                return self._pending_update(
+                    target_epub_path,
+                    epub_path,
+                    manifest,
+                    decision_value,
+                    capability_error,
                 )
             existing = self._read_existing_remote(
                 target_epub_path,

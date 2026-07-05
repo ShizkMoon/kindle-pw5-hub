@@ -453,6 +453,116 @@ class PublishTests(unittest.TestCase):
             self.assertEqual(remote_manifest.read_bytes(), old_manifest_bytes)
             self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
 
+    def test_safe_append_target_verification_failure_restores_old_epub(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = root / "webdav"
+            (webdav / "books").mkdir(parents=True)
+            target_path = "/books/Book - Author.epub"
+            remote_epub = webdav / "books/Book - Author.epub"
+            remote_manifest = webdav / "books/Book - Author.hermes.json"
+            old_epub_bytes = b"old-epub"
+            old_manifest_bytes = b'{"old":true}'
+            remote_epub.write_bytes(old_epub_bytes)
+            remote_manifest.write_bytes(old_manifest_bytes)
+            epub = root / "candidate.epub"
+            epub.write_bytes(b"new-epub")
+
+            class UnreadableAfterTargetWriteClient(LocalWebDavClient):
+                def __init__(self, client_root):
+                    super().__init__(client_root)
+                    self.target_write_seen = False
+                    self.fail_next_target_stat = False
+
+                def put_if_match(self, path, data, etag):
+                    result = super().put_if_match(path, data, etag)
+                    if path == target_path and data == b"new-epub":
+                        self.target_write_seen = True
+                        self.fail_next_target_stat = True
+                    return result
+
+                def stat(self, path):
+                    if path == target_path and self.fail_next_target_stat:
+                        self.fail_next_target_stat = False
+                        return WebDavResource(True, '"wrong-post-write-etag"')
+                    return super().stat(path)
+
+            publisher = WebDavPublisher(UnreadableAfterTargetWriteClient(webdav))
+            report = publisher.publish(
+                target_path,
+                epub,
+                manifest(UpdateDecision.SAFE_APPEND),
+                expected_old_epub_hash=sha256_bytes(old_epub_bytes),
+                expected_old_manifest_hash=sha256_bytes(old_manifest_bytes),
+            )
+
+            self.assertEqual(report["status"], "pending")
+            self.assertEqual(remote_epub.read_bytes(), old_epub_bytes)
+            self.assertEqual(remote_manifest.read_bytes(), old_manifest_bytes)
+
+    def test_safe_append_http_like_client_without_put_response_etags_goes_pending_before_touching_old_epub(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = root / "webdav"
+            (webdav / "books").mkdir(parents=True)
+            remote_epub = webdav / "books/Book - Author.epub"
+            remote_manifest = webdav / "books/Book - Author.hermes.json"
+            old_epub_bytes = b"old-epub"
+            old_manifest_bytes = b'{"old":true}'
+            remote_epub.write_bytes(old_epub_bytes)
+            remote_manifest.write_bytes(old_manifest_bytes)
+            epub = root / "candidate.epub"
+            epub.write_bytes(b"new-epub")
+
+            class NoPutResponseEtagClient:
+                supports_existing_overwrite = True
+                supports_new_publish = True
+
+                def __init__(self, client_root):
+                    self.inner = LocalWebDavClient(client_root)
+
+                def stat(self, path):
+                    return self.inner.stat(path)
+
+                def exists(self, path):
+                    return self.inner.exists(path)
+
+                def get(self, path):
+                    return self.inner.get(path)
+
+                def put(self, path, data):
+                    return self.inner.put(path, data)
+
+                def put_if_absent(self, path, data):
+                    self.inner.put_if_absent(path, data)
+                    return WebDavWriteResult(None)
+
+                def put_if_match(self, path, data, etag):
+                    if path == "/books/Book - Author.epub":
+                        raise AssertionError("live EPUB must not be touched before probe passes")
+                    self.inner.put_if_match(path, data, etag)
+                    return WebDavWriteResult(None)
+
+                def delete_if_match(self, path, etag):
+                    return self.inner.delete_if_match(path, etag)
+
+                def mkdir(self, path):
+                    return self.inner.mkdir(path)
+
+            publisher = WebDavPublisher(NoPutResponseEtagClient(webdav))
+            report = publisher.publish(
+                "/books/Book - Author.epub",
+                epub,
+                manifest(UpdateDecision.SAFE_APPEND),
+                expected_old_epub_hash=sha256_bytes(old_epub_bytes),
+                expected_old_manifest_hash=sha256_bytes(old_manifest_bytes),
+            )
+
+            self.assertEqual(report["status"], "pending")
+            self.assertIn("PUT response ETags", report["reason"])
+            self.assertEqual(remote_epub.read_bytes(), old_epub_bytes)
+            self.assertEqual(remote_manifest.read_bytes(), old_manifest_bytes)
+
     def test_safe_append_rollback_does_not_overwrite_concurrent_writer_after_manifest_conflict(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
