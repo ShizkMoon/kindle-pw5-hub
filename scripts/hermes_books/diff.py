@@ -55,15 +55,20 @@ def compare_for_update(
         new_chapter = new_inspection.chapters[idx]
         old_item_id = getattr(old_chapter, "item_id", "")
         new_item_id = getattr(new_chapter, "item_id", "")
+        old_structure = getattr(old_chapter, "structure_fingerprint", "")
+        new_structure = getattr(new_chapter, "structure_fingerprint", "")
         fingerprint_same = old_chapter.fingerprint == new_chapter.fingerprint
+        structure_same = bool(old_structure and new_structure and old_structure == new_structure)
         href_same = old_chapter.href == new_chapter.href
         item_id_same = not (old_item_id or new_item_id) or old_item_id == new_item_id
 
-        if fingerprint_same and href_same and item_id_same:
+        if fingerprint_same and structure_same and href_same and item_id_same:
             matched += 1
         else:
             if not fingerprint_same:
                 changed.append(f"chapter {idx + 1} fingerprint changed")
+            if not structure_same:
+                changed.append(f"chapter {idx + 1} structure changed")
             if not href_same:
                 changed.append(f"chapter {idx + 1} href changed")
             if not item_id_same:

@@ -1,11 +1,26 @@
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 from scripts.hermes_books.diff import compare_for_update
 from scripts.hermes_books.inspect import inspect_epub
 from scripts.hermes_books.models import BookManifest, UpdateDecision
 from tests.hermes_books.helpers import make_epub, reverse_spine_chapters
+
+
+def rewrite_chapter(epub_path: Path, chapter_path: str, replace: tuple[str, str]) -> None:
+    with zipfile.ZipFile(epub_path, "r") as source:
+        entries = {name: source.read(name) for name in source.namelist()}
+
+    full_path = f"EPUB/{chapter_path}"
+    html = entries[full_path].decode("utf-8")
+    html = html.replace(replace[0], replace[1])
+    entries[full_path] = html.encode("utf-8")
+
+    with zipfile.ZipFile(epub_path, "w") as target:
+        for name, content in entries.items():
+            target.writestr(name, content)
 
 
 def manifest(title="Book", author="Author"):
@@ -166,6 +181,46 @@ class DiffTests(unittest.TestCase):
             result = compare_for_update(manifest(), manifest(title="Book Revised"), old, new)
 
             self.assertEqual(result.decision, UpdateDecision.SAFE_METADATA)
+
+    def test_same_text_with_changed_paragraph_structure_is_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            old = inspect_epub(make_epub(root / "old.epub", chapters=[("第一章", "AB")]))
+            new_path = make_epub(root / "new.epub", chapters=[("第一章", "AB")])
+            rewrite_chapter(new_path, "chapters/ch0001.xhtml", ("<p>AB</p>", "<p>A</p><p>B</p>"))
+            new = inspect_epub(new_path)
+
+            self.assertEqual(old.chapters[0].fingerprint, new.chapters[0].fingerprint)
+            self.assertNotEqual(
+                old.chapters[0].structure_fingerprint,
+                new.chapters[0].structure_fingerprint,
+            )
+
+            result = compare_for_update(manifest(), manifest(), old, new)
+
+            self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
+            self.assertIn("chapter 1 structure changed", result.reasons)
+
+    def test_same_text_with_changed_reader_anchor_is_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            old_path = make_epub(root / "old.epub", chapters=[("第一章", "same body")])
+            new_path = make_epub(root / "new.epub", chapters=[("第一章", "same body")])
+            rewrite_chapter(old_path, "chapters/ch0001.xhtml", ("<p>same body</p>", '<p id="p1">same body</p>'))
+            rewrite_chapter(new_path, "chapters/ch0001.xhtml", ("<p>same body</p>", '<p id="p2">same body</p>'))
+            old = inspect_epub(old_path)
+            new = inspect_epub(new_path)
+
+            self.assertEqual(old.chapters[0].fingerprint, new.chapters[0].fingerprint)
+            self.assertNotEqual(
+                old.chapters[0].structure_fingerprint,
+                new.chapters[0].structure_fingerprint,
+            )
+
+            result = compare_for_update(manifest(), manifest(), old, new)
+
+            self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
+            self.assertIn("chapter 1 structure changed", result.reasons)
 
 
 if __name__ == "__main__":

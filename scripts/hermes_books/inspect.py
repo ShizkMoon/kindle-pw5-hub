@@ -55,40 +55,63 @@ def _metadata_first(book: epub.EpubBook, namespace: str, name: str, default: str
     return default
 
 
-class _ReaderBodyTextParser(HTMLParser):
+class _ReaderBodyParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self._body_depth = 0
         self._ignored_depth = 0
         self._texts: list[str] = []
+        self._structure: list[str] = []
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        self._enter_tag(tag)
+        self._enter_tag(tag, attrs)
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag.lower() in {"head", "h1", "h2", "h3", "h4", "h5", "h6"}:
+        tag = tag.lower()
+        if tag in {"head", "h1", "h2", "h3", "h4", "h5", "h6"}:
             return
+        if self._body_depth and not self._ignored_depth:
+            self._structure.append(f"<{self._structure_tag(tag, attrs)}/>")
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
-        if tag == "body" and self._body_depth:
-            self._body_depth -= 1
         if tag in {"head", "h1", "h2", "h3", "h4", "h5", "h6"} and self._ignored_depth:
             self._ignored_depth -= 1
+            return
+        if self._body_depth and not self._ignored_depth and tag != "body":
+            self._structure.append(f"</{tag}>")
+        if tag == "body" and self._body_depth:
+            self._body_depth -= 1
 
     def handle_data(self, data: str) -> None:
         if self._body_depth and not self._ignored_depth:
             self._texts.append(data)
+            text = _normalise_text(data)
+            if text:
+                self._structure.append(f"text:{text}")
 
     def text(self) -> str:
         return "".join(self._texts)
 
-    def _enter_tag(self, tag: str) -> None:
+    def structure(self) -> str:
+        return "\n".join(self._structure)
+
+    def _enter_tag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         tag = tag.lower()
         if tag == "body":
             self._body_depth += 1
         if tag in {"head", "h1", "h2", "h3", "h4", "h5", "h6"}:
             self._ignored_depth += 1
+            return
+        if self._body_depth and not self._ignored_depth and tag != "body":
+            self._structure.append(f"<{self._structure_tag(tag, attrs)}>")
+
+    def _structure_tag(self, tag: str, attrs: list[tuple[str, str | None]]) -> str:
+        anchors = []
+        for key, value in attrs:
+            if key and key.lower() in {"id", "name"} and value:
+                anchors.append(f'{key.lower()}="{value.strip()}"')
+        return " ".join([tag, *anchors])
 
 
 def _normalise_text(raw: str) -> str:
@@ -96,15 +119,23 @@ def _normalise_text(raw: str) -> str:
 
 
 def _reader_body_text(raw_html: bytes) -> str:
-    parser = _ReaderBodyTextParser()
+    parser = _ReaderBodyParser()
     parser.feed(raw_html.decode("utf-8", errors="replace"))
     parser.close()
     return parser.text()
 
 
-def _fingerprint(raw_html: bytes) -> tuple[str, int]:
-    text = _normalise_text(_reader_body_text(raw_html))
-    return hashlib.sha256(text.encode("utf-8")).hexdigest(), len(text)
+def _fingerprint(raw_html: bytes) -> tuple[str, int, str]:
+    parser = _ReaderBodyParser()
+    parser.feed(raw_html.decode("utf-8", errors="replace"))
+    parser.close()
+    text = _normalise_text(parser.text())
+    structure = parser.structure()
+    return (
+        hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        len(text),
+        hashlib.sha256(structure.encode("utf-8")).hexdigest(),
+    )
 
 
 def _css_issues(item_name: str, css: str) -> list[QualityIssue]:
@@ -227,9 +258,9 @@ def _spine_item_id(entry: Any) -> str:
 
 def _chapter_info(index: int, item: epub.EpubItem, item_id: str) -> ChapterInfo:
     href = str(getattr(item, "file_name", ""))
-    fingerprint, text_chars = _fingerprint(item.get_content())
+    fingerprint, text_chars, structure_fingerprint = _fingerprint(item.get_content())
     title = _string_value(getattr(item, "title", "")) or href
-    return ChapterInfo(index, title, href, fingerprint, text_chars, item_id)
+    return ChapterInfo(index, title, href, fingerprint, text_chars, item_id, structure_fingerprint)
 
 
 def _spine_ordered_document_items(book: epub.EpubBook) -> list[tuple[epub.EpubItem, str]]:

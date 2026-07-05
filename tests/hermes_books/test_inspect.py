@@ -59,6 +59,10 @@ class InspectTests(unittest.TestCase):
             second = inspect_epub(second_path)
 
             self.assertEqual(first.chapters[0].fingerprint, second.chapters[0].fingerprint)
+            self.assertEqual(
+                first.chapters[0].structure_fingerprint,
+                second.chapters[0].structure_fingerprint,
+            )
             self.assertEqual(first.chapters[0].text_chars, second.chapters[0].text_chars)
 
     def test_chapter_named_chapter_nav_is_not_skipped(self):

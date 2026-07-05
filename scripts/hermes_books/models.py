@@ -99,6 +99,7 @@ class ChapterInfo:
     fingerprint: str
     text_chars: int
     item_id: str = ""
+    structure_fingerprint: str = ""
 
 
 @dataclass
