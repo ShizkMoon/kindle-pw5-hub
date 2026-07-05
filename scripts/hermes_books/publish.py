@@ -456,16 +456,16 @@ class WebDavPublisher:
     ) -> str | None:
         return self._verified_after_write(path, expected_data, write_result, require_etag=True)
 
-    def _restore_existing_target_after_failed_write(
+    def _restore_existing_resource_after_failed_write(
         self,
-        target_epub_path: str,
-        candidate_epub: bytes,
-        existing: _ExistingRemote,
+        path: str,
+        candidate_bytes: bytes,
+        old_bytes: bytes,
         write_result: WebDavWriteResult | None,
     ) -> None:
         try:
-            state = self.client.stat(target_epub_path)
-            current_bytes = self.client.get(target_epub_path) if state.exists else b""
+            state = self.client.stat(path)
+            current_bytes = self.client.get(path) if state.exists else b""
         except Exception:
             state = WebDavResource(False)
             current_bytes = b""
@@ -473,14 +473,14 @@ class WebDavPublisher:
         if (
             state.exists
             and state.etag
-            and hashlib.sha256(current_bytes).hexdigest() == hashlib.sha256(candidate_epub).hexdigest()
+            and hashlib.sha256(current_bytes).hexdigest() == hashlib.sha256(candidate_bytes).hexdigest()
         ):
-            if self._safe_put_if_match(target_epub_path, existing.epub_bytes, state.etag):
+            if self._safe_put_if_match(path, old_bytes, state.etag):
                 return
 
         self._safe_put_if_match(
-            target_epub_path,
-            existing.epub_bytes,
+            path,
+            old_bytes,
             write_result.etag if write_result else None,
         )
 
@@ -652,10 +652,10 @@ class WebDavPublisher:
             target_write,
         )
         if not target_write_etag:
-            self._restore_existing_target_after_failed_write(
+            self._restore_existing_resource_after_failed_write(
                 target_epub_path,
                 candidate_epub,
-                existing,
+                existing.epub_bytes,
                 target_write,
             )
             return self._pending_update(
@@ -713,6 +713,12 @@ class WebDavPublisher:
             manifest_write,
         )
         if not manifest_write_etag:
+            self._restore_existing_resource_after_failed_write(
+                manifest_path,
+                candidate_manifest,
+                existing.manifest_bytes,
+                manifest_write,
+            )
             self._safe_put_if_match(target_epub_path, existing.epub_bytes, target_write_etag)
             return self._pending_update(
                 target_epub_path,

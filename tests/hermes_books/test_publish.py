@@ -842,6 +842,42 @@ class PublishTests(unittest.TestCase):
             self.assertEqual(remote_manifest.read_bytes(), concurrent_manifest_bytes)
             self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
 
+    def test_safe_append_manifest_verification_failure_restores_old_epub_and_manifest(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = root / "webdav"
+            (webdav / "books").mkdir(parents=True)
+            target_path = "/books/Book - Author.epub"
+            manifest_path = "/books/Book - Author.hermes.json"
+            remote_epub = webdav / "books/Book - Author.epub"
+            remote_manifest = webdav / "books/Book - Author.hermes.json"
+            old_epub_bytes = b"old-epub"
+            old_manifest_bytes = b'{"old":true}'
+            remote_epub.write_bytes(old_epub_bytes)
+            remote_manifest.write_bytes(old_manifest_bytes)
+            epub = root / "candidate.epub"
+            epub.write_bytes(b"new-epub")
+
+            class MismatchedManifestEtagClient(LocalWebDavClient):
+                def put_if_match(self, path, data, etag):
+                    result = super().put_if_match(path, data, etag)
+                    if path == manifest_path and data != old_manifest_bytes:
+                        return WebDavWriteResult('"stale-manifest-etag"')
+                    return result
+
+            publisher = WebDavPublisher(MismatchedManifestEtagClient(webdav))
+            report = publisher.publish(
+                target_path,
+                epub,
+                manifest(UpdateDecision.SAFE_APPEND),
+                expected_old_epub_hash=sha256_bytes(old_epub_bytes),
+                expected_old_manifest_hash=sha256_bytes(old_manifest_bytes),
+            )
+
+            self.assertEqual(report["status"], "pending")
+            self.assertEqual(remote_epub.read_bytes(), old_epub_bytes)
+            self.assertEqual(remote_manifest.read_bytes(), old_manifest_bytes)
+
     def test_repeated_safe_publish_uses_timestamped_backup_directories(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
