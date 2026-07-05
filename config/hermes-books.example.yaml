@@ -1,0 +1,24 @@
+webdav:
+  base_url: "https://example.com/webdav"
+  books_path: "/books"
+  username_env: "WEBDAV_USERNAME"
+  password_env: "WEBDAV_PASSWORD"
+
+pipeline:
+  require_epubcheck: true
+  keep_runs: true
+  output_profile: "koreader"
+  language: "zh"
+
+update_policy:
+  default: "append-safe"
+  chapter_fingerprint_threshold: 0.98
+  block_on_chapter_count_decrease: true
+  block_on_reordered_existing_chapters: true
+
+asset_enrichment:
+  mode: "balanced"
+  auto_cover_min_confidence: 0.85
+  auto_insert_illustration_min_confidence: 0.92
+  require_source_url: true
+  preserve_original_images: true
