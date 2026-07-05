@@ -93,6 +93,53 @@ class PublishTests(unittest.TestCase):
             self.assertFalse((webdav / "books/Book - Author.epub").exists())
             self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
 
+    def test_new_book_attribute_only_publish_support_still_goes_pending(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = root / "webdav"
+            epub = root / "candidate.epub"
+            epub.write_bytes(b"new-epub")
+
+            class AttributeOnlyClient:
+                supports_new_publish = True
+                supports_existing_overwrite = True
+
+                def __init__(self, client_root):
+                    self.inner = LocalWebDavClient(client_root)
+
+                def stat(self, path):
+                    return self.inner.stat(path)
+
+                def exists(self, path):
+                    return self.inner.exists(path)
+
+                def get(self, path):
+                    return self.inner.get(path)
+
+                def put(self, path, data):
+                    return self.inner.put(path, data)
+
+                def put_if_absent(self, path, data):
+                    if path == "/books/Book - Author.epub":
+                        raise AssertionError("non-local client must not create live EPUB")
+                    return self.inner.put_if_absent(path, data)
+
+                def put_if_match(self, path, data, etag):
+                    return self.inner.put_if_match(path, data, etag)
+
+                def delete_if_match(self, path, etag):
+                    return self.inner.delete_if_match(path, etag)
+
+                def mkdir(self, path):
+                    return self.inner.mkdir(path)
+
+            publisher = WebDavPublisher(AttributeOnlyClient(webdav))
+            report = publisher.publish("/books/Book - Author.epub", epub, manifest(UpdateDecision.NEW_BOOK))
+
+            self.assertEqual(report["status"], "pending")
+            self.assertFalse((webdav / "books/Book - Author.epub").exists())
+            self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
+
     def test_risky_update_goes_to_pending_without_touching_old_book(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

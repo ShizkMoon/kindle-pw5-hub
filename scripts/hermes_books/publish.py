@@ -351,7 +351,9 @@ class WebDavPublisher:
         return bool(getattr(self.client, "supports_existing_overwrite", False))
 
     def _supports_new_publish(self) -> bool:
-        return bool(getattr(self.client, "supports_new_publish", False))
+        return isinstance(self.client, LocalWebDavClient) and bool(
+            getattr(self.client, "supports_new_publish", False)
+        )
 
     def _verified_etag_after_write(
         self,
@@ -411,7 +413,7 @@ class WebDavPublisher:
             target_write,
         )
         if not target_write_etag:
-            self._safe_delete_if_match(target_epub_path, target_write_etag)
+            self._safe_delete_if_match(target_epub_path, target_write.etag if target_write else None)
             return self._pending_update(
                 target_epub_path,
                 epub_path,
