@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
 from scripts.hermes_books.config import AssetEnrichmentConfig, HermesConfig
@@ -93,6 +94,78 @@ class IntakeTests(unittest.TestCase):
             self.assertEqual(factory_calls, 1)
             self.assertTrue((result.reports_dir / "update-diff.md").exists())
             self.assertEqual(result.manifest.update_decision, UpdateDecision.SAFE_APPEND)
+
+    def test_existing_remote_epub_without_manifest_goes_pending(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = LocalWebDavClient(root / "webdav")
+            old_epub = make_epub(root / "old.epub")
+            new_epub = make_epub(root / "new.epub")
+
+            run_intake(
+                input_path=old_epub,
+                title="Book",
+                author="Author",
+                runs_root=root / "old-runs",
+                config=no_network_config(),
+                webdav_client=webdav,
+            )
+            remote_epub = root / "webdav/books/Book - Author.epub"
+            remote_manifest = root / "webdav/books/Book - Author.hermes.json"
+            old_remote_bytes = remote_epub.read_bytes()
+            remote_manifest.unlink()
+
+            result = run_intake(
+                input_path=new_epub,
+                title="Book",
+                author="Author",
+                runs_root=root / "new-runs",
+                config=no_network_config(),
+                webdav_client=webdav,
+            )
+
+            self.assertEqual(result.publish_report["status"], "pending")
+            self.assertEqual(remote_epub.read_bytes(), old_remote_bytes)
+            update_diff = result.reports_dir / "update-diff.md"
+            self.assertTrue(update_diff.exists())
+            self.assertIn("remote target exists without Hermes manifest", update_diff.read_text(encoding="utf-8"))
+
+    def test_existing_remote_opf_identifier_mismatch_goes_pending(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = LocalWebDavClient(root / "webdav")
+            old_epub = make_epub(root / "old.epub")
+            new_epub = make_epub(root / "new.epub")
+
+            run_intake(
+                input_path=old_epub,
+                title="Book",
+                author="Author",
+                runs_root=root / "old-runs",
+                config=no_network_config(),
+                webdav_client=webdav,
+            )
+            remote_epub = root / "webdav/books/Book - Author.epub"
+            remote_manifest = root / "webdav/books/Book - Author.hermes.json"
+            old_remote_bytes = remote_epub.read_bytes()
+            manifest_data = json.loads(remote_manifest.read_text(encoding="utf-8"))
+            manifest_data["opf_identifier"] = "urn:test:different-book"
+            remote_manifest.write_text(json.dumps(manifest_data), encoding="utf-8")
+
+            result = run_intake(
+                input_path=new_epub,
+                title="Book",
+                author="Author",
+                runs_root=root / "new-runs",
+                config=no_network_config(),
+                webdav_client=webdav,
+            )
+
+            self.assertEqual(result.publish_report["status"], "pending")
+            self.assertEqual(remote_epub.read_bytes(), old_remote_bytes)
+            update_diff = result.reports_dir / "update-diff.md"
+            self.assertTrue(update_diff.exists())
+            self.assertIn("OPF identifier mismatch for existing remote book", update_diff.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

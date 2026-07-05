@@ -66,6 +66,25 @@ def _manifest_path(target_epub_path: str) -> str:
     return target_epub_path[:-5] + ".hermes.json"
 
 
+def _write_update_diff_report(
+    path: Path,
+    decision: UpdateDecision,
+    reasons: list[str],
+    matched_existing_chapters: int = 0,
+    old_chapter_count: int = 0,
+    new_chapter_count: int = 0,
+) -> None:
+    path.write_text(
+        "# Update diff\n\n"
+        f"Decision: {decision.value}\n"
+        f"Reasons: {', '.join(reasons)}\n"
+        f"Matched existing chapters: {matched_existing_chapters}\n"
+        f"Old chapter count: {old_chapter_count}\n"
+        f"New chapter count: {new_chapter_count}\n",
+        encoding="utf-8",
+    )
+
+
 def run_intake(
     input_path: Path,
     title: str,
@@ -122,35 +141,59 @@ def run_intake(
 
     decision = UpdateDecision.NEW_BOOK
     manifest_path = _manifest_path(job.webdav_target_path)
-    if webdav_client.exists(manifest_path) and webdav_client.exists(job.webdav_target_path):
-        old_manifest = BookManifest.from_json(webdav_client.get(manifest_path).decode("utf-8"))
-        old_epub = paths.raw_dir / "old-remote.epub"
-        old_epub.write_bytes(webdav_client.get(job.webdav_target_path))
-        old_inspection = inspect_epub(old_epub)
-        candidate_manifest = _manifest_from_inspection(
-            job,
-            snapshot.source_hash,
-            output_epub,
-            inspection,
-            UpdateDecision.NEW_BOOK,
+    target_exists = webdav_client.exists(job.webdav_target_path)
+    manifest_exists = webdav_client.exists(manifest_path)
+    candidate_manifest = _manifest_from_inspection(
+        job,
+        snapshot.source_hash,
+        output_epub,
+        inspection,
+        UpdateDecision.NEW_BOOK,
+    )
+    if target_exists and not manifest_exists:
+        decision = UpdateDecision.BLOCKED_RISKY
+        _write_update_diff_report(
+            paths.reports_dir / "update-diff.md",
+            decision,
+            ["remote target exists without Hermes manifest"],
         )
-        diff = compare_for_update(
-            old_manifest,
-            candidate_manifest,
-            old_inspection,
-            inspection,
-            config.update_policy.chapter_fingerprint_threshold,
-        )
-        decision = diff.decision
-        (paths.reports_dir / "update-diff.md").write_text(
-            "# Update diff\n\n"
-            f"Decision: {diff.decision.value}\n"
-            f"Reasons: {', '.join(diff.reasons)}\n"
-            f"Matched existing chapters: {diff.matched_existing_chapters}\n"
-            f"Old chapter count: {diff.old_chapter_count}\n"
-            f"New chapter count: {diff.new_chapter_count}\n",
-            encoding="utf-8",
-        )
+    elif target_exists and manifest_exists:
+        try:
+            old_manifest = BookManifest.from_json(webdav_client.get(manifest_path).decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
+            decision = UpdateDecision.BLOCKED_RISKY
+            _write_update_diff_report(
+                paths.reports_dir / "update-diff.md",
+                decision,
+                ["remote Hermes manifest unreadable"],
+            )
+        else:
+            old_epub = paths.raw_dir / "old-remote.epub"
+            old_epub.write_bytes(webdav_client.get(job.webdav_target_path))
+            old_inspection = inspect_epub(old_epub)
+            diff = compare_for_update(
+                old_manifest,
+                candidate_manifest,
+                old_inspection,
+                inspection,
+                config.update_policy.chapter_fingerprint_threshold,
+            )
+            decision = diff.decision
+            reasons = list(diff.reasons)
+            if (
+                decision in {UpdateDecision.SAFE_APPEND, UpdateDecision.SAFE_METADATA}
+                and old_manifest.opf_identifier != candidate_manifest.opf_identifier
+            ):
+                decision = UpdateDecision.BLOCKED_RISKY
+                reasons.append("OPF identifier mismatch for existing remote book")
+            _write_update_diff_report(
+                paths.reports_dir / "update-diff.md",
+                decision,
+                reasons,
+                diff.matched_existing_chapters,
+                diff.old_chapter_count,
+                diff.new_chapter_count,
+            )
 
     manifest = _manifest_from_inspection(job, snapshot.source_hash, output_epub, inspection, decision)
     manifest.asset_report = asset_report_data
