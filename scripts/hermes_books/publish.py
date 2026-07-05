@@ -362,6 +362,15 @@ class WebDavPublisher:
             first = self.client.put_if_absent(probe_path, b"probe-1")
             if not first.etag:
                 return "existing target overwrite requires WebDAV PUT response ETags"
+            try:
+                stale = self.client.put_if_match(probe_path, b"probe-stale", '"hermes-stale-probe"')
+            except ConditionalWriteFailed:
+                pass
+            except ConditionalWriteUnsupported:
+                return "existing target overwrite requires WebDAV If-Match support"
+            else:
+                self._safe_delete_if_match(probe_path, stale.etag)
+                return "existing target overwrite requires WebDAV If-Match enforcement"
             second = self.client.put_if_match(probe_path, b"probe-2", first.etag)
             if not second.etag:
                 return "existing target overwrite requires WebDAV PUT response ETags"
@@ -410,6 +419,34 @@ class WebDavPublisher:
         write_result: WebDavWriteResult,
     ) -> str | None:
         return self._verified_after_write(path, expected_data, write_result, require_etag=True)
+
+    def _restore_existing_target_after_failed_write(
+        self,
+        target_epub_path: str,
+        candidate_epub: bytes,
+        existing: _ExistingRemote,
+        write_result: WebDavWriteResult | None,
+    ) -> None:
+        try:
+            state = self.client.stat(target_epub_path)
+            current_bytes = self.client.get(target_epub_path) if state.exists else b""
+        except Exception:
+            state = WebDavResource(False)
+            current_bytes = b""
+
+        if (
+            state.exists
+            and state.etag
+            and hashlib.sha256(current_bytes).hexdigest() == hashlib.sha256(candidate_epub).hexdigest()
+        ):
+            if self._safe_put_if_match(target_epub_path, existing.epub_bytes, state.etag):
+                return
+
+        self._safe_put_if_match(
+            target_epub_path,
+            existing.epub_bytes,
+            write_result.etag if write_result else None,
+        )
 
     def _publish_new_book(
         self,
@@ -579,10 +616,11 @@ class WebDavPublisher:
             target_write,
         )
         if not target_write_etag:
-            self._safe_put_if_match(
+            self._restore_existing_target_after_failed_write(
                 target_epub_path,
-                existing.epub_bytes,
-                target_write.etag if target_write else None,
+                candidate_epub,
+                existing,
+                target_write,
             )
             return self._pending_update(
                 target_epub_path,
