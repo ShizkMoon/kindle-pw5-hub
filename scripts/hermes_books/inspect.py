@@ -3,7 +3,8 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
+from html.parser import HTMLParser
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import ebooklib
@@ -50,13 +51,55 @@ def _metadata_first(book: epub.EpubBook, namespace: str, name: str, default: str
     return default
 
 
+class _ReaderBodyTextParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._body_depth = 0
+        self._ignored_depth = 0
+        self._texts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._enter_tag(tag)
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() in {"head", "h1", "h2", "h3", "h4", "h5", "h6"}:
+            return
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag == "body" and self._body_depth:
+            self._body_depth -= 1
+        if tag in {"head", "h1", "h2", "h3", "h4", "h5", "h6"} and self._ignored_depth:
+            self._ignored_depth -= 1
+
+    def handle_data(self, data: str) -> None:
+        if self._body_depth and not self._ignored_depth:
+            self._texts.append(data)
+
+    def text(self) -> str:
+        return "".join(self._texts)
+
+    def _enter_tag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag == "body":
+            self._body_depth += 1
+        if tag in {"head", "h1", "h2", "h3", "h4", "h5", "h6"}:
+            self._ignored_depth += 1
+
+
 def _normalise_text(raw: str) -> str:
-    raw = re.sub(r"<[^>]+>", "", raw)
     return re.sub(r"\s+", "", raw)
 
 
+def _reader_body_text(raw_html: bytes) -> str:
+    parser = _ReaderBodyTextParser()
+    parser.feed(raw_html.decode("utf-8", errors="replace"))
+    parser.close()
+    return parser.text()
+
+
 def _fingerprint(raw_html: bytes) -> tuple[str, int]:
-    text = _normalise_text(raw_html.decode("utf-8", errors="replace"))
+    text = _normalise_text(_reader_body_text(raw_html))
     return hashlib.sha256(text.encode("utf-8")).hexdigest(), len(text)
 
 
@@ -74,10 +117,46 @@ def _css_issues(item_name: str, css: str) -> list[QualityIssue]:
 
 
 def _is_nav_document(item: epub.EpubItem) -> bool:
-    name = str(getattr(item, "file_name", "")).lower()
-    if name.endswith(("nav.xhtml", "nav.html")):
+    name = _basename(str(getattr(item, "file_name", ""))).lower()
+    if name in {"nav.xhtml", "nav.html"}:
         return True
-    return "nav" in str(getattr(item, "properties", "")).lower()
+    if _string_value(getattr(item, "id", "")).lower() == "nav":
+        return True
+    return "nav" in _property_tokens(item)
+
+
+def _basename(href: str) -> str:
+    return PurePosixPath(href.replace("\\", "/")).name
+
+
+def _property_tokens(item: epub.EpubItem) -> set[str]:
+    properties = getattr(item, "properties", "")
+    if isinstance(properties, str):
+        return {token.lower() for token in properties.split()}
+    if isinstance(properties, (list, tuple, set)):
+        return {_string_value(token).lower() for token in properties if _string_value(token)}
+    return set()
+
+
+def _cover_item_ids(book: epub.EpubBook) -> set[str]:
+    cover_ids: set[str] = set()
+    for _, attrs in book.get_metadata("OPF", "meta"):
+        if not isinstance(attrs, dict):
+            continue
+        if _string_value(attrs.get("name")).lower() == "cover":
+            cover_id = _string_value(attrs.get("content"))
+            if cover_id:
+                cover_ids.add(cover_id)
+    return cover_ids
+
+
+def _is_cover_image(item: epub.EpubItem, cover_item_ids: set[str]) -> bool:
+    item_id = _string_value(getattr(item, "id", ""))
+    if item_id in cover_item_ids:
+        return True
+    if "cover-image" in _property_tokens(item):
+        return True
+    return PurePosixPath(str(getattr(item, "file_name", "")).replace("\\", "/")).stem.lower() == "cover"
 
 
 def inspect_epub(path: Path) -> EpubInspection:
@@ -99,11 +178,12 @@ def inspect_epub(path: Path) -> EpubInspection:
         report.chapters.append(ChapterInfo(chapter_index, title, href, fingerprint, text_chars))
         chapter_index += 1
 
+    cover_item_ids = _cover_item_ids(book)
     for item in book.get_items():
         media_type = str(getattr(item, "media_type", ""))
         href = str(getattr(item, "file_name", ""))
         if media_type.startswith("image/"):
-            role = "cover" if "cover" in href.lower() else "unknown"
+            role = "cover" if _is_cover_image(item, cover_item_ids) else "unknown"
             if role == "cover":
                 report.missing_cover = False
             report.images.append(ImageInfo(href, media_type, len(item.get_content()), role))
