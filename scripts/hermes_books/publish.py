@@ -134,26 +134,42 @@ class WebDavPublisher:
             suffix += 1
         return backup_dir
 
+    def _pending_update(
+        self,
+        target_epub_path: str,
+        epub_path: Path,
+        manifest: BookManifest,
+        decision_value: str,
+    ) -> dict[str, str]:
+        slug = Path(target_epub_path).stem
+        pending_dir = posixpath.join(posixpath.dirname(target_epub_path), ".pending", slug)
+        self.client.mkdir(pending_dir)
+        self.client.put(posixpath.join(pending_dir, "candidate.epub"), epub_path.read_bytes())
+        self.client.put(
+            posixpath.join(pending_dir, "candidate.hermes.json"),
+            manifest.to_json().encode("utf-8"),
+        )
+        self.client.put(
+            posixpath.join(pending_dir, "risk-report.md"),
+            f"# Pending update\n\nDecision: {decision_value}\n".encode("utf-8"),
+        )
+        return {"status": "pending", "path": pending_dir}
+
     def publish(self, target_epub_path: str, epub_path: Path, manifest: BookManifest) -> dict[str, str]:
         slug = Path(target_epub_path).stem
         manifest_path = target_epub_path[:-5] + ".hermes.json"
         decision = manifest.update_decision
+        decision_value = decision.value if isinstance(decision, UpdateDecision) else str(decision)
+        safe_overwrite_decisions = {UpdateDecision.SAFE_APPEND.value, UpdateDecision.SAFE_METADATA.value}
 
-        if decision in {UpdateDecision.BLOCKED_RISKY, UpdateDecision.REVIEW_MINOR}:
-            pending_dir = posixpath.join(posixpath.dirname(target_epub_path), ".pending", slug)
-            self.client.mkdir(pending_dir)
-            self.client.put(posixpath.join(pending_dir, "candidate.epub"), epub_path.read_bytes())
-            self.client.put(
-                posixpath.join(pending_dir, "candidate.hermes.json"),
-                manifest.to_json().encode("utf-8"),
-            )
-            self.client.put(
-                posixpath.join(pending_dir, "risk-report.md"),
-                f"# Pending update\n\nDecision: {decision.value}\n".encode("utf-8"),
-            )
-            return {"status": "pending", "path": pending_dir}
+        if decision_value in {UpdateDecision.BLOCKED_RISKY.value, UpdateDecision.REVIEW_MINOR.value}:
+            return self._pending_update(target_epub_path, epub_path, manifest, decision_value)
 
-        if self.client.exists(target_epub_path):
+        target_exists = self.client.exists(target_epub_path)
+        if target_exists and decision_value not in safe_overwrite_decisions:
+            return self._pending_update(target_epub_path, epub_path, manifest, decision_value)
+
+        if target_exists:
             backup_dir = self._backup_dir(target_epub_path, slug)
             self.client.mkdir(backup_dir)
             self.client.put(posixpath.join(backup_dir, "old.epub"), self.client.get(target_epub_path))

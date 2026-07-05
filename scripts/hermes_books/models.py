@@ -98,6 +98,7 @@ class ChapterInfo:
     href: str
     fingerprint: str
     text_chars: int
+    item_id: str = ""
 
 
 @dataclass

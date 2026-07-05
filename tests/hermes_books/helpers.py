@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import zipfile
 
 from ebooklib import epub
 
@@ -9,6 +10,7 @@ def make_epub(
     path: Path,
     title: str = "Book",
     author: str = "Author",
+    identifier: str = "urn:test:book-author",
     chapters: list[tuple[str, str]] | None = None,
     chapter_file_names: list[str] | None = None,
     css: str = "p { text-indent: 2em; }",
@@ -17,7 +19,7 @@ def make_epub(
     if chapters is None:
         chapters = [("第一章", "第一章正文"), ("第二章", "第二章正文")]
     book = epub.EpubBook()
-    book.set_identifier("urn:test:book-author")
+    book.set_identifier(identifier)
     book.set_title(title)
     book.set_language("zh")
     book.add_author(author)
@@ -64,3 +66,20 @@ def make_epub(
     book.add_item(epub.EpubNav())
     epub.write_epub(str(path), book)
     return path
+
+
+def reverse_spine_chapters(path: Path) -> None:
+    with zipfile.ZipFile(path, "r") as source:
+        entries = {name: source.read(name) for name in source.namelist()}
+
+    opf_path = "EPUB/content.opf"
+    opf = entries[opf_path].decode("utf-8")
+    opf = opf.replace(
+        '<itemref idref="chapter_0"/>\n    <itemref idref="chapter_1"/>',
+        '<itemref idref="chapter_1"/>\n    <itemref idref="chapter_0"/>',
+    )
+    entries[opf_path] = opf.encode("utf-8")
+
+    with zipfile.ZipFile(path, "w") as target:
+        for name, content in entries.items():
+            target.writestr(name, content)

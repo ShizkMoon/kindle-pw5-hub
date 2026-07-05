@@ -217,6 +217,49 @@ def _is_cover_image(item: epub.EpubItem, cover_item_ids: set[str], cover_hrefs: 
     return PurePosixPath(href).stem.lower() == "cover"
 
 
+def _spine_item_id(entry: Any) -> str:
+    if isinstance(entry, (tuple, list)):
+        return _string_value(entry[0]) if entry else ""
+    if isinstance(entry, str):
+        return entry
+    return _string_value(getattr(entry, "id", ""))
+
+
+def _chapter_info(index: int, item: epub.EpubItem, item_id: str) -> ChapterInfo:
+    href = str(getattr(item, "file_name", ""))
+    fingerprint, text_chars = _fingerprint(item.get_content())
+    title = _string_value(getattr(item, "title", "")) or href
+    return ChapterInfo(index, title, href, fingerprint, text_chars, item_id)
+
+
+def _spine_ordered_document_items(book: epub.EpubBook) -> list[tuple[epub.EpubItem, str]]:
+    documents = list(book.get_items_of_type(ebooklib.ITEM_DOCUMENT))
+    documents_by_id = {
+        _string_value(getattr(item, "id", "")): item
+        for item in documents
+        if _string_value(getattr(item, "id", ""))
+    }
+
+    ordered: list[tuple[epub.EpubItem, str]] = []
+    seen: set[str] = set()
+    for entry in getattr(book, "spine", []) or []:
+        item_id = _spine_item_id(entry)
+        item = documents_by_id.get(item_id)
+        if item is None or item_id in seen or _is_nav_document(item):
+            continue
+        ordered.append((item, item_id))
+        seen.add(item_id)
+
+    if ordered:
+        return ordered
+
+    return [
+        (item, _string_value(getattr(item, "id", "")))
+        for item in documents
+        if not _is_nav_document(item)
+    ]
+
+
 def inspect_epub(path: Path) -> EpubInspection:
     book = epub.read_epub(str(path))
     report = EpubInspection(
@@ -226,15 +269,8 @@ def inspect_epub(path: Path) -> EpubInspection:
         opf_identifier=_metadata_first(book, "DC", "identifier", ""),
     )
 
-    chapter_index = 1
-    for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
-        if _is_nav_document(item):
-            continue
-        href = str(getattr(item, "file_name", ""))
-        fingerprint, text_chars = _fingerprint(item.get_content())
-        title = _string_value(getattr(item, "title", "")) or href
-        report.chapters.append(ChapterInfo(chapter_index, title, href, fingerprint, text_chars))
-        chapter_index += 1
+    for chapter_index, (item, item_id) in enumerate(_spine_ordered_document_items(book), start=1):
+        report.chapters.append(_chapter_info(chapter_index, item, item_id))
 
     cover_item_ids = _cover_item_ids(book)
     epub3_cover_ids, epub3_cover_hrefs = _epub3_cover_references(path)

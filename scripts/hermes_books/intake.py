@@ -4,8 +4,9 @@ import argparse
 import json
 import os
 import posixpath
+import subprocess
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,18 @@ class IntakeResult:
     manifest: BookManifest
     reports_dir: Path
     publish_report: dict[str, str]
+
+
+@dataclass
+class EpubValidationResult:
+    status: str
+    errors: list[dict[str, Any]] = field(default_factory=list)
+    warnings: list[dict[str, Any]] = field(default_factory=list)
+    checker: str = "epubcheck"
+    infos: list[dict[str, Any]] = field(default_factory=list)
+
+    def to_json(self) -> str:
+        return json.dumps(asdict(self), ensure_ascii=False, indent=2)
 
 
 def _manifest_from_inspection(
@@ -85,6 +98,73 @@ def _write_update_diff_report(
     )
 
 
+def _default_epub_validator(epub_path: Path) -> EpubValidationResult:
+    try:
+        from scripts.epub_fix import validate as epubcheck_validate
+    except Exception as exc:
+        return EpubValidationResult(
+            status="skipped",
+            warnings=[{"id": "EPUBCHECK_UNAVAILABLE", "message": f"EPUBCheck helper unavailable: {exc}"}],
+        )
+
+    java_path = epubcheck_validate.find_java()
+    if not java_path:
+        return EpubValidationResult(
+            status="skipped",
+            warnings=[{"id": "JAVA_UNAVAILABLE", "message": "Java runtime not found; EPUBCheck skipped"}],
+        )
+
+    script_dir = str(Path(epubcheck_validate.__file__).resolve().parent)
+    jar_path = epubcheck_validate.find_epubcheck_jar(script_dir)
+    if not jar_path:
+        return EpubValidationResult(
+            status="skipped",
+            warnings=[{"id": "EPUBCHECK_JAR_UNAVAILABLE", "message": "epubcheck.jar not found; validation skipped"}],
+        )
+
+    checker = f"epubcheck:{jar_path}"
+    try:
+        result = subprocess.run(
+            [java_path, "-jar", jar_path, "--json", str(epub_path.resolve())],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+    except subprocess.TimeoutExpired:
+        return EpubValidationResult(
+            status="failed",
+            errors=[{"id": "EPUBCHECK_TIMEOUT", "message": "EPUBCheck timed out after 300 seconds"}],
+            checker=checker,
+        )
+    except Exception as exc:
+        return EpubValidationResult(
+            status="failed",
+            errors=[{"id": "EPUBCHECK_RUN_FAILED", "message": f"EPUBCheck failed to run: {exc}"}],
+            checker=checker,
+        )
+
+    raw_output = result.stdout.strip()
+    if not raw_output:
+        message = result.stderr.strip() or "EPUBCheck produced no JSON output"
+        return EpubValidationResult(
+            status="failed",
+            errors=[{"id": "EPUBCHECK_NO_OUTPUT", "message": message[:2000]}],
+            checker=checker,
+        )
+
+    try:
+        errors, warnings, infos = epubcheck_validate.parse_epubcheck_output(raw_output)
+    except (json.JSONDecodeError, ValueError) as exc:
+        return EpubValidationResult(
+            status="failed",
+            errors=[{"id": "EPUBCHECK_PARSE_FAILED", "message": f"Could not parse EPUBCheck JSON: {exc}"}],
+            checker=checker,
+        )
+
+    status = "failed" if errors else "passed"
+    return EpubValidationResult(status=status, errors=errors, warnings=warnings, infos=infos, checker=checker)
+
+
 def run_intake(
     input_path: Path,
     title: str,
@@ -94,6 +174,7 @@ def run_intake(
     webdav_client: WebDavClient | None = None,
     *,
     webdav_client_factory: Callable[[HermesConfig], WebDavClient] | None = None,
+    epub_validator: Callable[[Path], EpubValidationResult] | None = None,
 ) -> IntakeResult:
     config = config or HermesConfig.load(None)
     books_path = _valid_books_path(config.webdav.books_path)
@@ -130,6 +211,25 @@ def run_intake(
         json.dumps(asset_report_data, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+    validation = (epub_validator or _default_epub_validator)(output_epub)
+    (paths.reports_dir / "epubcheck.json").write_text(validation.to_json(), encoding="utf-8")
+
+    if config.pipeline.require_epubcheck and validation.errors:
+        decision = UpdateDecision.BLOCKED_RISKY
+        manifest = _manifest_from_inspection(job, snapshot.source_hash, output_epub, inspection, decision)
+        manifest.asset_report = asset_report_data
+        (paths.reports_dir / "manifest.json").write_text(manifest.to_json(), encoding="utf-8")
+        publish_report = {
+            "status": "blocked",
+            "path": job.webdav_target_path,
+            "reason": "EPUBCheck validation errors",
+        }
+        (paths.reports_dir / "publish-report.json").write_text(
+            json.dumps(publish_report, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return IntakeResult(job, output_epub, manifest, paths.reports_dir, publish_report)
 
     if webdav_client is None:
         if webdav_client_factory is not None:
@@ -180,10 +280,12 @@ def run_intake(
             )
             decision = diff.decision
             reasons = list(diff.reasons)
-            if (
-                decision in {UpdateDecision.SAFE_APPEND, UpdateDecision.SAFE_METADATA}
-                and old_manifest.opf_identifier != candidate_manifest.opf_identifier
-            ):
+            identifiers = {
+                old_manifest.opf_identifier,
+                old_inspection.opf_identifier,
+                candidate_manifest.opf_identifier,
+            }
+            if len(identifiers) != 1:
                 decision = UpdateDecision.BLOCKED_RISKY
                 reasons.append("OPF identifier mismatch for existing remote book")
             _write_update_diff_report(

@@ -4,7 +4,7 @@ import zipfile
 from pathlib import Path
 
 from scripts.hermes_books.inspect import inspect_epub, write_quality_report
-from tests.hermes_books.helpers import make_epub
+from tests.hermes_books.helpers import make_epub, reverse_spine_chapters
 
 
 def _add_epub3_cover_image_property(epub_path: Path) -> None:
@@ -73,6 +73,22 @@ class InspectTests(unittest.TestCase):
 
             self.assertEqual(len(report.chapters), 1)
             self.assertEqual(report.chapters[0].href, "chapters/chapter-nav.xhtml")
+
+    def test_chapters_follow_spine_order_not_manifest_order(self):
+        with tempfile.TemporaryDirectory() as td:
+            epub_path = make_epub(
+                Path(td) / "book.epub",
+                chapters=[("First", "First body"), ("Second", "Second body")],
+            )
+            reverse_spine_chapters(epub_path)
+
+            report = inspect_epub(epub_path)
+
+            self.assertEqual(
+                [chapter.href for chapter in report.chapters],
+                ["chapters/ch0002.xhtml", "chapters/ch0001.xhtml"],
+            )
+            self.assertEqual([chapter.item_id for chapter in report.chapters], ["chapter_1", "chapter_0"])
 
     def test_cover_metadata_detects_cover_with_non_cover_filename(self):
         with tempfile.TemporaryDirectory() as td:

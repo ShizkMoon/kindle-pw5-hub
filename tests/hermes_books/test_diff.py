@@ -5,7 +5,7 @@ from pathlib import Path
 from scripts.hermes_books.diff import compare_for_update
 from scripts.hermes_books.inspect import inspect_epub
 from scripts.hermes_books.models import BookManifest, UpdateDecision
-from tests.hermes_books.helpers import make_epub
+from tests.hermes_books.helpers import make_epub, reverse_spine_chapters
 
 
 def manifest(title="Book", author="Author"):
@@ -77,6 +77,44 @@ class DiffTests(unittest.TestCase):
             self.assertIn("existing chapter prefix changed", result.reasons)
             self.assertIn("chapter 1 fingerprint changed", result.reasons)
             self.assertIn("chapter 2 fingerprint changed", result.reasons)
+
+    def test_spine_only_reorder_with_unchanged_manifest_order_is_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            old = inspect_epub(
+                make_epub(root / "old.epub", chapters=[("第一章", "A"), ("第二章", "B")])
+            )
+            new_path = make_epub(root / "new.epub", chapters=[("第一章", "A"), ("第二章", "B")])
+            reverse_spine_chapters(new_path)
+            new = inspect_epub(new_path)
+
+            result = compare_for_update(manifest(), manifest(), old, new)
+
+            self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
+            self.assertIn("existing chapter prefix changed", result.reasons)
+
+    def test_existing_prefix_href_or_item_id_drift_is_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            old = inspect_epub(
+                make_epub(
+                    root / "old.epub",
+                    chapters=[("第一章", "same body")],
+                    chapter_file_names=["chapters/old.xhtml"],
+                )
+            )
+            new = inspect_epub(
+                make_epub(
+                    root / "new.epub",
+                    chapters=[("第一章", "same body")],
+                    chapter_file_names=["chapters/new.xhtml"],
+                )
+            )
+
+            result = compare_for_update(manifest(), manifest(), old, new)
+
+            self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
+            self.assertIn("chapter 1 href changed", result.reasons)
 
     def test_one_changed_existing_chapter_is_blocked_even_when_most_match(self):
         with tempfile.TemporaryDirectory() as td:

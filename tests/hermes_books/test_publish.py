@@ -60,6 +60,22 @@ class PublishTests(unittest.TestCase):
             self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
             self.assertEqual(report["status"], "pending")
 
+    def test_new_book_with_existing_target_goes_pending_without_touching_old_book(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = root / "webdav"
+            (webdav / "books").mkdir(parents=True)
+            (webdav / "books/Book - Author.epub").write_bytes(b"old")
+            epub = root / "candidate.epub"
+            epub.write_bytes(b"new")
+
+            publisher = WebDavPublisher(LocalWebDavClient(webdav))
+            report = publisher.publish("/books/Book - Author.epub", epub, manifest(UpdateDecision.NEW_BOOK))
+
+            self.assertEqual((webdav / "books/Book - Author.epub").read_bytes(), b"old")
+            self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
+            self.assertEqual(report["status"], "pending")
+
     def test_repeated_safe_publish_uses_timestamped_backup_directories(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

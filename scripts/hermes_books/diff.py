@@ -53,10 +53,21 @@ def compare_for_update(
     changed: list[str] = []
     for idx, old_chapter in enumerate(old_inspection.chapters):
         new_chapter = new_inspection.chapters[idx]
-        if old_chapter.fingerprint == new_chapter.fingerprint:
+        old_item_id = getattr(old_chapter, "item_id", "")
+        new_item_id = getattr(new_chapter, "item_id", "")
+        fingerprint_same = old_chapter.fingerprint == new_chapter.fingerprint
+        href_same = old_chapter.href == new_chapter.href
+        item_id_same = not (old_item_id or new_item_id) or old_item_id == new_item_id
+
+        if fingerprint_same and href_same and item_id_same:
             matched += 1
         else:
-            changed.append(f"chapter {idx + 1} fingerprint changed")
+            if not fingerprint_same:
+                changed.append(f"chapter {idx + 1} fingerprint changed")
+            if not href_same:
+                changed.append(f"chapter {idx + 1} href changed")
+            if not item_id_same:
+                changed.append(f"chapter {idx + 1} item_id changed")
 
     ratio = matched / old_count
     if changed:
