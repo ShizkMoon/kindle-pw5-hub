@@ -67,7 +67,7 @@ def build_draft_from_txt(job: BookJob, raw_txt_path: Path, draft_dir: Path) -> P
             "<head><title>{}</title><link rel='stylesheet' type='text/css' href='../styles/standard.css'/></head>"
             "<body>{}</body></html>"
         ).format(html.escape(title), "\n".join(body)).encode("utf-8")
-        chapter.add_item(css_item)
+        chapter.add_link(href="../styles/standard.css", rel="stylesheet", type="text/css")
         book.add_item(chapter)
         spine.append(chapter)
         toc.append(epub.Link(chapter.file_name, title, f"ch{idx:04d}"))

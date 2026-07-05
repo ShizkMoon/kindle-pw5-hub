@@ -1,6 +1,9 @@
+import posixpath
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
+from xml.etree import ElementTree
 
 from ebooklib import epub
 
@@ -33,6 +36,23 @@ class TxtBuildTests(unittest.TestCase):
             html_names = sorted(item.file_name for item in book.get_items() if item.file_name.endswith(".xhtml"))
             self.assertIn("chapters/ch0001.xhtml", html_names)
             self.assertIn("chapters/ch0002.xhtml", html_names)
+            with zipfile.ZipFile(draft) as archive:
+                archive_names = set(archive.namelist())
+                chapter_names = sorted(
+                    name for name in archive_names if name.startswith("EPUB/chapters/") and name.endswith(".xhtml")
+                )
+                self.assertTrue(chapter_names)
+                for chapter_name in chapter_names:
+                    root_element = ElementTree.fromstring(archive.read(chapter_name))
+                    stylesheet_hrefs = [
+                        element.attrib["href"]
+                        for element in root_element.findall(".//{http://www.w3.org/1999/xhtml}link")
+                        if element.attrib.get("rel") == "stylesheet" and element.attrib.get("href")
+                    ]
+                    self.assertTrue(stylesheet_hrefs, chapter_name)
+                    for href in stylesheet_hrefs:
+                        resolved = posixpath.normpath(posixpath.join(posixpath.dirname(chapter_name), href))
+                        self.assertIn(resolved, archive_names)
 
 
 if __name__ == "__main__":
