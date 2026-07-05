@@ -49,6 +49,27 @@ class PublishTests(unittest.TestCase):
             self.assertTrue((root / "webdav/books/Book - Author.hermes.json").exists())
             self.assertEqual(report["status"], "published")
 
+    def test_new_book_manifest_write_failure_removes_live_epub_and_goes_pending(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = root / "webdav"
+            epub = root / "candidate.epub"
+            epub.write_bytes(b"new-epub")
+
+            class FailingManifestCreateClient(LocalWebDavClient):
+                def put_if_absent(self, path, data):
+                    if path == "/books/Book - Author.hermes.json":
+                        raise RuntimeError("manifest create failed")
+                    return super().put_if_absent(path, data)
+
+            publisher = WebDavPublisher(FailingManifestCreateClient(webdav))
+            report = publisher.publish("/books/Book - Author.epub", epub, manifest(UpdateDecision.NEW_BOOK))
+
+            self.assertEqual(report["status"], "pending")
+            self.assertIn("new manifest write failed", report["reason"])
+            self.assertFalse((webdav / "books/Book - Author.epub").exists())
+            self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
+
     def test_risky_update_goes_to_pending_without_touching_old_book(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

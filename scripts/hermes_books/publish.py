@@ -380,8 +380,9 @@ class WebDavPublisher:
         decision_value: str,
     ) -> dict[str, str]:
         target_write: WebDavWriteResult | None = None
+        candidate_epub = epub_path.read_bytes()
         try:
-            target_write = self.client.put_if_absent(target_epub_path, epub_path.read_bytes())
+            target_write = self.client.put_if_absent(target_epub_path, candidate_epub)
         except ConditionalWriteFailed:
             return self._pending_update(
                 target_epub_path,
@@ -399,10 +400,15 @@ class WebDavPublisher:
                 "new target could not be created conditionally",
             )
 
+        target_write_etag = self._verified_etag_after_write(
+            target_epub_path,
+            candidate_epub,
+            target_write,
+        )
         try:
             self.client.put_if_absent(manifest_path, manifest.to_json().encode("utf-8"))
         except ConditionalWriteFailed:
-            self._safe_delete_if_match(target_epub_path, target_write.etag if target_write else None)
+            self._safe_delete_if_match(target_epub_path, target_write_etag)
             return self._pending_update(
                 target_epub_path,
                 epub_path,
@@ -411,13 +417,22 @@ class WebDavPublisher:
                 "manifest was created concurrently during conditional publish",
             )
         except ConditionalWriteUnsupported:
-            self._safe_delete_if_match(target_epub_path, target_write.etag if target_write else None)
+            self._safe_delete_if_match(target_epub_path, target_write_etag)
             return self._pending_update(
                 target_epub_path,
                 epub_path,
                 manifest,
                 decision_value,
                 "new manifest could not be created conditionally",
+            )
+        except Exception:
+            self._safe_delete_if_match(target_epub_path, target_write_etag)
+            return self._pending_update(
+                target_epub_path,
+                epub_path,
+                manifest,
+                decision_value,
+                "new manifest write failed after target creation",
             )
         return {"status": "published", "path": target_epub_path}
 
