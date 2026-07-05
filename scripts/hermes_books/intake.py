@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import posixpath
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -72,6 +73,8 @@ def run_intake(
     runs_root: Path = Path("runs"),
     config: HermesConfig | None = None,
     webdav_client: WebDavClient | None = None,
+    *,
+    webdav_client_factory: Callable[[HermesConfig], WebDavClient] | None = None,
 ) -> IntakeResult:
     config = config or HermesConfig.load(None)
     books_path = _valid_books_path(config.webdav.books_path)
@@ -109,13 +112,17 @@ def run_intake(
         encoding="utf-8",
     )
 
+    if webdav_client is None:
+        if webdav_client_factory is not None:
+            webdav_client = webdav_client_factory(config)
+        else:
+            username = os.environ.get(config.webdav.username_env, "")
+            password = os.environ.get(config.webdav.password_env, "")
+            webdav_client = HttpWebDavClient(config.webdav.base_url, username, password)
+
     decision = UpdateDecision.NEW_BOOK
     manifest_path = _manifest_path(job.webdav_target_path)
-    if (
-        webdav_client is not None
-        and webdav_client.exists(manifest_path)
-        and webdav_client.exists(job.webdav_target_path)
-    ):
+    if webdav_client.exists(manifest_path) and webdav_client.exists(job.webdav_target_path):
         old_manifest = BookManifest.from_json(webdav_client.get(manifest_path).decode("utf-8"))
         old_epub = paths.raw_dir / "old-remote.epub"
         old_epub.write_bytes(webdav_client.get(job.webdav_target_path))
@@ -149,10 +156,6 @@ def run_intake(
     manifest.asset_report = asset_report_data
     (paths.reports_dir / "manifest.json").write_text(manifest.to_json(), encoding="utf-8")
 
-    if webdav_client is None:
-        username = os.environ.get(config.webdav.username_env, "")
-        password = os.environ.get(config.webdav.password_env, "")
-        webdav_client = HttpWebDavClient(config.webdav.base_url, username, password)
     publish_report = WebDavPublisher(webdav_client).publish(job.webdav_target_path, output_epub, manifest)
     (paths.reports_dir / "publish-report.json").write_text(
         json.dumps(publish_report, ensure_ascii=False, indent=2),

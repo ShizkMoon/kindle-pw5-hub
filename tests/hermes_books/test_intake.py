@@ -4,7 +4,7 @@ from pathlib import Path
 
 from scripts.hermes_books.config import AssetEnrichmentConfig, HermesConfig
 from scripts.hermes_books.intake import run_intake
-from scripts.hermes_books.models import AssetMode
+from scripts.hermes_books.models import AssetMode, UpdateDecision
 from scripts.hermes_books.publish import LocalWebDavClient
 from tests.hermes_books.helpers import make_epub
 
@@ -51,6 +51,48 @@ class IntakeTests(unittest.TestCase):
 
             self.assertEqual(result.publish_report["status"], "published")
             self.assertTrue((root / "webdav/books/Book - Author.epub").exists())
+
+    def test_default_client_path_compares_existing_remote_update(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = LocalWebDavClient(root / "webdav")
+            old_epub = make_epub(
+                root / "old.epub",
+                chapters=[("第一章", "第一章正文")],
+            )
+            new_epub = make_epub(
+                root / "new.epub",
+                chapters=[("第一章", "第一章正文"), ("第二章", "第二章正文")],
+            )
+
+            run_intake(
+                input_path=old_epub,
+                title="Book",
+                author="Author",
+                runs_root=root / "old-runs",
+                config=no_network_config(),
+                webdav_client=webdav,
+            )
+
+            factory_calls = 0
+
+            def webdav_client_factory(_config):
+                nonlocal factory_calls
+                factory_calls += 1
+                return webdav
+
+            result = run_intake(
+                input_path=new_epub,
+                title="Book",
+                author="Author",
+                runs_root=root / "new-runs",
+                config=no_network_config(),
+                webdav_client_factory=webdav_client_factory,
+            )
+
+            self.assertEqual(factory_calls, 1)
+            self.assertTrue((result.reports_dir / "update-diff.md").exists())
+            self.assertEqual(result.manifest.update_decision, UpdateDecision.SAFE_APPEND)
 
 
 if __name__ == "__main__":
