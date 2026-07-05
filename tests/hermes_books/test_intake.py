@@ -143,6 +143,47 @@ class IntakeTests(unittest.TestCase):
             self.assertTrue(update_diff.exists())
             self.assertIn("remote target exists without Hermes manifest", update_diff.read_text(encoding="utf-8"))
 
+    def test_unreadable_existing_remote_manifest_goes_pending_without_touching_old_target(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav_root = root / "webdav"
+            webdav = LocalWebDavClient(webdav_root)
+            old_epub = make_epub(root / "old.epub")
+            new_epub = make_epub(root / "new.epub")
+
+            run_intake(
+                input_path=old_epub,
+                title="Book",
+                author="Author",
+                runs_root=root / "old-runs",
+                config=no_network_config(),
+                webdav_client=webdav,
+            )
+            remote_epub = webdav_root / "books/Book - Author.epub"
+            old_remote_bytes = remote_epub.read_bytes()
+
+            class UnreadableManifestClient(LocalWebDavClient):
+                def get(self, path):
+                    if path == "/books/Book - Author.hermes.json":
+                        raise RuntimeError("injected manifest read failure")
+                    return super().get(path)
+
+            result = run_intake(
+                input_path=new_epub,
+                title="Book",
+                author="Author",
+                runs_root=root / "new-runs",
+                config=no_network_config(),
+                webdav_client=UnreadableManifestClient(webdav_root),
+            )
+
+            self.assertEqual(result.publish_report["status"], "pending")
+            self.assertEqual(result.manifest.update_decision, UpdateDecision.BLOCKED_RISKY)
+            self.assertEqual(remote_epub.read_bytes(), old_remote_bytes)
+            update_diff = result.reports_dir / "update-diff.md"
+            self.assertTrue(update_diff.exists())
+            self.assertIn("remote Hermes manifest unreadable", update_diff.read_text(encoding="utf-8"))
+
     def test_existing_remote_opf_identifier_mismatch_goes_pending(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

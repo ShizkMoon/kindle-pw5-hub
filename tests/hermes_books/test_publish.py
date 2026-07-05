@@ -76,6 +76,49 @@ class PublishTests(unittest.TestCase):
             self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
             self.assertEqual(report["status"], "pending")
 
+    def test_safe_append_existing_target_without_manifest_goes_pending_without_touching_old_book(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = root / "webdav"
+            (webdav / "books").mkdir(parents=True)
+            remote_epub = webdav / "books/Book - Author.epub"
+            old_epub_bytes = b"old"
+            remote_epub.write_bytes(old_epub_bytes)
+            epub = root / "candidate.epub"
+            epub.write_bytes(b"new")
+
+            publisher = WebDavPublisher(LocalWebDavClient(webdav))
+            report = publisher.publish("/books/Book - Author.epub", epub, manifest(UpdateDecision.SAFE_APPEND))
+
+            self.assertEqual(remote_epub.read_bytes(), old_epub_bytes)
+            self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
+            self.assertEqual(report["status"], "pending")
+
+    def test_safe_append_existing_target_with_unreadable_manifest_goes_pending_without_touching_old_book(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = root / "webdav"
+            (webdav / "books").mkdir(parents=True)
+            remote_epub = webdav / "books/Book - Author.epub"
+            old_epub_bytes = b"old"
+            remote_epub.write_bytes(old_epub_bytes)
+            (webdav / "books/Book - Author.hermes.json").write_bytes(b'{"old":true}')
+            epub = root / "candidate.epub"
+            epub.write_bytes(b"new")
+
+            class UnreadableManifestClient(LocalWebDavClient):
+                def get(self, path):
+                    if path == "/books/Book - Author.hermes.json":
+                        raise RuntimeError("injected manifest read failure")
+                    return super().get(path)
+
+            publisher = WebDavPublisher(UnreadableManifestClient(webdav))
+            report = publisher.publish("/books/Book - Author.epub", epub, manifest(UpdateDecision.SAFE_APPEND))
+
+            self.assertEqual(remote_epub.read_bytes(), old_epub_bytes)
+            self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
+            self.assertEqual(report["status"], "pending")
+
     def test_repeated_safe_publish_uses_timestamped_backup_directories(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

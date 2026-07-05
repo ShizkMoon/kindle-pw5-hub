@@ -261,7 +261,7 @@ def run_intake(
     elif target_exists and manifest_exists:
         try:
             old_manifest = BookManifest.from_json(webdav_client.get(manifest_path).decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
+        except Exception:
             decision = UpdateDecision.BLOCKED_RISKY
             _write_update_diff_report(
                 paths.reports_dir / "update-diff.md",

@@ -173,10 +173,14 @@ class WebDavPublisher:
         old_manifest_bytes: bytes | None = None
         had_manifest = False
         if target_exists:
-            old_epub_bytes = self.client.get(target_epub_path)
             had_manifest = self.client.exists(manifest_path)
-            if had_manifest:
+            if not had_manifest:
+                return self._pending_update(target_epub_path, epub_path, manifest, decision_value)
+            try:
                 old_manifest_bytes = self.client.get(manifest_path)
+            except Exception:
+                return self._pending_update(target_epub_path, epub_path, manifest, decision_value)
+            old_epub_bytes = self.client.get(target_epub_path)
             backup_dir = self._backup_dir(target_epub_path, slug)
             self.client.mkdir(backup_dir)
             self.client.put(posixpath.join(backup_dir, "old.epub"), old_epub_bytes)
