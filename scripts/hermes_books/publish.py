@@ -363,6 +363,15 @@ class WebDavPublisher:
             if not first.etag:
                 return "existing target overwrite requires WebDAV PUT response ETags"
             try:
+                duplicate = self.client.put_if_absent(probe_path, b"probe-duplicate")
+            except ConditionalWriteFailed:
+                pass
+            except ConditionalWriteUnsupported:
+                return "existing target overwrite requires WebDAV If-None-Match support"
+            else:
+                self._safe_delete_if_match(probe_path, duplicate.etag)
+                return "existing target overwrite requires WebDAV If-None-Match enforcement"
+            try:
                 stale = self.client.put_if_match(probe_path, b"probe-stale", '"hermes-stale-probe"')
             except ConditionalWriteFailed:
                 pass
@@ -394,6 +403,8 @@ class WebDavPublisher:
         try:
             self.client.mkdir(probe_dir)
             first = self.client.put_if_absent(probe_path, b"probe-1")
+            if not first.etag:
+                return "new target publish requires WebDAV PUT response ETags"
             if not self._verified_after_write(probe_path, b"probe-1", first, require_etag=False):
                 return "new target publish probe could not be verified"
             try:
