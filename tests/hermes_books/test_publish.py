@@ -70,6 +70,29 @@ class PublishTests(unittest.TestCase):
             self.assertFalse((webdav / "books/Book - Author.epub").exists())
             self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
 
+    def test_new_book_without_verified_publish_support_goes_pending_without_creating_live_epub(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = root / "webdav"
+            epub = root / "candidate.epub"
+            epub.write_bytes(b"new-epub")
+
+            class UnsupportedNewPublishClient(LocalWebDavClient):
+                supports_new_publish = False
+
+                def put_if_absent(self, path, data):
+                    if path == "/books/Book - Author.epub":
+                        raise AssertionError("live EPUB must not be created")
+                    return super().put_if_absent(path, data)
+
+            publisher = WebDavPublisher(UnsupportedNewPublishClient(webdav))
+            report = publisher.publish("/books/Book - Author.epub", epub, manifest(UpdateDecision.NEW_BOOK))
+
+            self.assertEqual(report["status"], "pending")
+            self.assertIn("verified conditional WebDAV support", report["reason"])
+            self.assertFalse((webdav / "books/Book - Author.epub").exists())
+            self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
+
     def test_risky_update_goes_to_pending_without_touching_old_book(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

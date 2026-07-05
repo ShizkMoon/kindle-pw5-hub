@@ -75,6 +75,7 @@ class WebDavClient(Protocol):
 
 
 class LocalWebDavClient:
+    supports_new_publish = True
     supports_existing_overwrite = True
 
     def __init__(self, root: Path) -> None:
@@ -154,6 +155,7 @@ class LocalWebDavClient:
 
 
 class HttpWebDavClient:
+    supports_new_publish = False
     supports_existing_overwrite = False
 
     def __init__(self, base_url: str, username: str = "", password: str = "") -> None:
@@ -348,6 +350,9 @@ class WebDavPublisher:
     def _supports_existing_overwrite(self) -> bool:
         return bool(getattr(self.client, "supports_existing_overwrite", False))
 
+    def _supports_new_publish(self) -> bool:
+        return bool(getattr(self.client, "supports_new_publish", False))
+
     def _verified_etag_after_write(
         self,
         path: str,
@@ -405,6 +410,16 @@ class WebDavPublisher:
             candidate_epub,
             target_write,
         )
+        if not target_write_etag:
+            self._safe_delete_if_match(target_epub_path, target_write_etag)
+            return self._pending_update(
+                target_epub_path,
+                epub_path,
+                manifest,
+                decision_value,
+                "new target write could not be verified after conditional publish",
+            )
+
         try:
             self.client.put_if_absent(manifest_path, manifest.to_json().encode("utf-8"))
         except ConditionalWriteFailed:
@@ -664,6 +679,15 @@ class WebDavPublisher:
                 manifest,
                 decision_value,
                 "Hermes manifest exists without target EPUB",
+            )
+
+        if not self._supports_new_publish():
+            return self._pending_update(
+                target_epub_path,
+                epub_path,
+                manifest,
+                decision_value,
+                "new target publish requires verified conditional WebDAV support",
             )
 
         return self._publish_new_book(target_epub_path, manifest_path, epub_path, manifest, decision_value)
