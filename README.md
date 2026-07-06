@@ -1,179 +1,176 @@
-# 我的 Kindle 工作流
+# Kindle PW5 Hub
 
-> KPW5 (第 11 代) 越狱后 × AI 智能管线，打造个人最舒适的阅读书务体系。
-> 任意格式进，精排 EPUB 出，KOReader 阅读，AI 自动处理标注。
+Kindle PW5 + KOReader 的个人书务工作流。这个仓库现在的主线不是“Kindle 折腾指南”，而是 Hermes 书籍入库管线：本地 TXT/EPUB 进入统一处理流程，生成面向 KOReader 的 EPUB，检查章节和资源稳定性，再通过 WebDAV 发布到阅读端。
 
-## 关联项目
+当前实现已经覆盖本地 intake、EPUB 检查、元数据增强、WebDAV 发布、风险更新 pending 和 KOReader 进度保护。大模型搜索、章节级清洗、缺章补全、UMD/JAR 支持还没有接入主流程，文档里会把这些明确标为后续方向。
 
-本仓库是阅读子系统。工位的物理设计和 AI 基础设施在另外两个仓库：
+## 当前能力
 
-| 仓库 | 说明 |
-|---|---|
-| [dorm-workstation](https://github.com/ShizkMoon/dorm-workstation) | 物理工位：桌面布局、模块图纸、设备采购 |
-| [ai-workstation](https://github.com/ShizkMoon/ai-workstation) | AI 基础设施：云服务器部署、模型路由、工具链、日常节律 |
+Hermes intake 可以做这些事：
 
-## 核心理念
+- 接收本地 `.txt` 或 `.epub`。
+- 为每次运行创建 `runs/<job-id>/` 工作区，保存 raw、draft、normalized 和 reports。
+- TXT 自动生成 EPUB 初稿；EPUB 会被规范化并注入 Hermes 样式资源。
+- 检查章节、图片、CSS、OPF identifier、封面状态和 reader-facing 指纹。
+- 生成 `quality-report.md`、`asset-report.json`、`epubcheck.json`、`manifest.json`、`publish-report.json`。
+- 通过 provider/reasoner 注入元数据证据和裁决，自动写入 OPF metadata 与封面。
+- 发布到 WebDAV `/books`，风险更新进入 `/books/.pending/`，不直接覆盖旧书。
+- 在 KOReader `hashdocsettings` 模式下阻断旧书 live overwrite，避免 EPUB 内容 hash 改变后丢失进度关联。
 
-这不是一个"Kindle 使用指南"——这是一套 **AI 驱动的一人书务自动化工程**。我把一切可以交给机器的环节都交给了机器：格式转换、章节识别、元数据补全、CSS 排版、标注合成。我只负责阅读和思考。
+目前不做：
 
-## 决策
+- 不抓取 UMD/JAR。
+- 不自动补全文本正文或缺章。
+- 不让大模型直接改写正文。
+- 不迁移 KOReader 本地 `.sdr` 或 hashdocsettings sidecar。
+- 不依赖 Send to Kindle、Whispersync 或亚马逊云。
 
-| 决策 | 状态 |
-|---|---|
-| 越狱 | ✅ WinterBreak，KOReader 主力阅读器，原生系统保留备份 |
-| 格式 | **EPUB 唯一**，任何输入格式 → EPUB 标准化 → KOReader |
-| 亚马逊云 | ❌ 不用（无 Whispersync / Send to Kindle） |
-| AI 骨干 | New API 网关 + 5 模型智能路由（详见 [ai-workstation](https://github.com/ShizkMoon/ai-workstation)） |
-| MCP 生态 | calibremcp 已部署；epub-processor / metadata-enricher / koreader-bridge 规划中 |
-| 智能家居 | Home Assistant + Xiaomi 集成 → 米家设备；ESPHome → 墨水屏面板 |
+## 快速开始
 
-## 文档
+复制示例配置：
 
-| 文档 | 内容 |
-|---|---|
-| [系统架构](docs/architecture.md) | 完整工程规格：拓扑、数据流、AI 管线、模型路由、MCP 矩阵、部署清单 |
-| [EPUB 处理管线](docs/pipeline.md) | 处理标准：输入矩阵、TXT 网文专项、CSS 规范、验证流程 |
-| [Kindle 部署](docs/kindle-setup.md) | 越狱 → KOReader → 插件安装 → 样式配置 |
-| [MCP 规格](docs/mcp-specs.md) | 3 组 MCP Server 完整工具定义与接口说明 |
-| [阅读在日常节律中的位置](docs/daily-reading-rhythm.md) | Kindle × AI 管线在一天 24 小时里的实际体验 |
-| [选购建议](docs/buying-guide.md) | KPW5 vs KPW6 vs Kobo Clara BW——已持有 KPW5 的前提下是否值得升级 |
-| [Apple 兼容性](docs/apple-compatibility.md) | 未来购入 iPhone/iPad/Mac 时现有基础设施的兼容性评估 |
-
-## AI 管线工作流
-
-```
-📥 源文件 (TXT/网文/其他格式)
-      │
-      ▼
-🤖 AI 格式判定 → ebook-convert 标准化 → EPUB 初稿
-      │
-      ▼
-🤖 AI 章节检测 (GLM-4.7) → 网文自动分章 → 目录生成
-      │
-      ▼
-🤖 AI CSS 审查 (GLM-4.7) → KOReader 优化样式注入
-      │
-      ▼
-🔧 结构修复 → EPUBCheck 验证 → ebooklib 自动修补
-      │
-      ▼
-🤖 AI 元数据补全 → 多源查询 → 交叉验证 → 写入 EPUB
-      │
-      ▼
-📚 Calibre 书库 (EPUB 母本) → WebDAV 推送 → KOReader 下载
-      │
-      ▼
-📖 阅读中: 标注自动回流 → 🤖 AI 合成笔记 → 本地知识库
+```powershell
+Copy-Item config\hermes-books.example.yaml config\hermes-books.yaml
 ```
 
-**你只需要两件事**：把文件放进来源目录，在 KOReader 中打开书。剩下的都是自动的。
+设置 WebDAV 凭据：
 
-## 脚本
-
-这 5 个脚本是管线的主力执行者，每个都集成了 AI 调用能力：
-
-```
-scripts/
-├── txt2epub/
-│   └── pipeline.py              网文 TXT → 精排 EPUB
-│       · charset-normalizer 编码检测
-│       · 正则 + AI (GLM-4.7) 双通道章节识别
-│       · OpenCC 简繁转换
-│       · KOReader CSS 样式注入
-├── epub_fix/
-│   ├── validate.py              EPUBCheck 包装，输出结构化报告
-│   └── fix_common.py            自动修复 spine/NCX/引用/元数据
-├── metadata/
-│   └── enrich.py                 ISBN → 豆瓣/Google/OL 查询 → AI 融合写入
-└── koreader_sync/
-    └── sync_highlights.py       WebDAV 拉取 → AI 去重格式化 → Markdown 输出
+```powershell
+$env:WEBDAV_USERNAME = "koreader"
+$env:WEBDAV_PASSWORD = "your-password"
 ```
 
-## Hermes Book Intake MVP
-
-本地 TXT 或 EPUB 可以通过 Hermes intake 管线进入统一 EPUB3 处理流程：
+运行本地 TXT/EPUB intake：
 
 ```powershell
 python -m scripts.hermes_books.intake "D:\Books\raw.txt" -t "书名" -a "作者" --config config/hermes-books.yaml
 python -m scripts.hermes_books.intake "D:\Books\raw.epub" -t "书名" -a "作者" --config config/hermes-books.yaml
 ```
 
-管线会在 `runs/<job-id>/` 下保留 raw、draft、normalized 和 reports。发布到 WebDAV 前会执行 append-safe 检查：旧章节稳定且只追加新章时覆盖 `/books/书名 - 作者.epub`，风险更新进入 `/books/.pending/`。
+正常跑到检查阶段后，重点看这些文件：
 
-### 激进元数据增强
-
-Hermes intake 支持 provider/reasoner 驱动的激进元数据增强：搜索层提供带 URL 的证据，大模型/规则 reasoner 产出结构化字段决策，管线再自动写入 EPUB OPF metadata、系列/卷号/插画师等扩展字段和封面。每个字段都会进入 `runs/<job-id>/reports/metadata-report.json` 与 `metadata-report.md`，记录旧值、新值、证据、置信度和是否应用。
-
-为了保护 KOReader 进度、书签和标注关联，增强阶段不会自动改变 WebDAV 文件名、目标路径、`canonical_id` 或 OPF 主 identifier。`book_folder` 和 `docsettings` 模式下，只有章节正文、章节结构、spine、资源指纹保持稳定时才允许 live overwrite；`hashdocsettings` 模式第一版默认阻断 live overwrite，改写后的 EPUB 会进入 `.pending/`，避免内容 hash 改变后 KOReader 无法关联旧阅读状态。
-
-## 快速开始
-
-### 我的日常使用流程
-
-```powershell
-# 1. 把 TXT 网文扔进工作目录，一句命令出 EPUB
-python scripts/txt2epub/pipeline.py "D:\Books\新下载的小说.txt" -t "书名" -a "作者"
-
-# 2. 检查生成的 EPUB 是否合规
-python scripts/epub_fix/validate.py "D:\Books\书名.epub"
-
-# 3. 如果验证有问题，自动修复（先预演确认再执行）
-python scripts/epub_fix/fix_common.py "D:\Books\书名.epub" --fix all --dry-run
-python scripts/epub_fix/fix_common.py "D:\Books\书名.epub" --fix all
-
-# 4. 补全元数据（有 ISBN 最好，没有也能搜）
-python scripts/metadata/enrich.py --isbn 9787544270878
-python scripts/metadata/enrich.py --title "书名" --author "作者"
-
-# 5. 扔进 Calibre，WebDAV 自动同步到 KOReader
-# （Calibre 导入 → 书架选中 → WebDAV 上传，本步骤通过 MCP 全自动）
-
-# 6. 在 KOReader 上阅读，标注自动回流
-# 每日 22:00 Agent 自动处理，也可手动触发:
-python scripts/koreader_sync/sync_highlights.py --pull --export-to "D:\Notes\阅读笔记"
+```text
+runs/<job-id>/reports/quality-report.md
+runs/<job-id>/reports/publish-report.json
+runs/<job-id>/reports/manifest.json
 ```
 
-### 环境依赖
+如果启用了元数据增强并且流程进入 metadata 阶段，还会有 `metadata-report.json` 和 `metadata-report.md`。已有远端旧书、远端状态异常或更新被阻断时，会额外生成 `update-diff.md`。
 
-```powershell
-# Python 包
-pip install ebooklib charset-normalizer opencc pillow lxml
+`publish-report.json` 的 `status` 是最直接的结果：
 
-# Calibre (提供 ebook-convert / calibredb CLI，以及 GUI 管理)
-scoop install calibre
+| status | 含义 |
+|---|---|
+| `published` | 已发布到 WebDAV 目标路径 |
+| `pending` | 候选书已放入 `.pending/`，旧书没有被覆盖 |
+| `pending-local` | 远端 pending 上传失败，本地 reports 保留原因 |
+| `blocked` | 质量门禁阻断发布 |
 
-# EPUBCheck (W3C EPUB 验证器)
-# 从 https://github.com/w3c/epubcheck/releases 下载，解压到 PATH 目录
+## 配置重点
 
-# MCP 客户端 (二选一)
-# - CherryStudio: 图形化 MCP 管理，适合日常使用
-# - Claude Code: 终端 MCP 集成，适合开发调试
+示例配置在 [config/hermes-books.example.yaml](config/hermes-books.example.yaml)。
+
+```yaml
+webdav:
+  base_url: "https://example.com/webdav"
+  books_path: "/books"
+  username_env: "WEBDAV_USERNAME"
+  password_env: "WEBDAV_PASSWORD"
+
+pipeline:
+  require_epubcheck: true
+  output_profile: "koreader"
+  language: "zh"
+
+metadata_enrichment:
+  mode: "aggressive"      # off | report-only | aggressive
+  require_evidence_url: true
+  write_epub_metadata: true
+  write_cover: true
+
+koreader:
+  metadata_location: "book_folder"   # book_folder | docsettings | hashdocsettings
+  hashdocsettings_policy: "block"
 ```
 
-### 环境变量
+建议 KOReader 端优先使用 `book_folder`。如果你已经启用了 `hashdocsettings`，Hermes 第一版会把旧书元数据改写放入 pending，不做 live overwrite。
+
+## 元数据增强
+
+元数据增强由两个可注入接口组成：
+
+- `MetadataProvider.search(clues)`：返回带 URL、来源、字段事实和置信度的 evidence。
+- `MetadataReasoner.resolve(clues, evidence)`：融合 evidence，输出字段级 `MetadataDecision`。
+
+只有满足配置阈值、证据完整且 action 为 `apply` 的字段会写入 EPUB。写入范围包括：
+
+- `dc:title`
+- `dc:creator`
+- `dc:publisher`
+- `dc:description`
+- `dc:subject`
+- 额外 ISBN identifier
+- `hermes:series`
+- `hermes:volume`
+- `hermes:original_title`
+- `hermes:illustrators`
+- `hermes:translators`
+- `hermes:imprint`
+- `hermes:published_date`
+- 封面资源和 OPF cover metadata
+
+Hermes 会保留 OPF 主 identifier、WebDAV 文件名和 `canonical_id`。写入后会重新 inspect EPUB；如果章节 href、item id、正文 fingerprint、结构 fingerprint 或资源 fingerprint 漂移，旧书发布会被阻断。
+
+## 发布策略
+
+Hermes 把远端 `/books/书名 - 作者.epub` 当作阅读母本。发布前会读取旧 EPUB 和旧 `.hermes.json` manifest，比较章节和 reader-facing 结构。
+
+| 决策 | 处理 |
+|---|---|
+| `NEW_BOOK` | 远端不存在时发布新书 |
+| `SAFE_APPEND` | 旧章节稳定，只追加新章节时允许覆盖 |
+| `SAFE_METADATA` | 章节和资源稳定，只有元数据变化时允许覆盖 |
+| `BLOCKED_RISKY` | 写入 `.pending/`，旧书保持原样 |
+| `REVIEW_MINOR` | 预留人工确认路径，发布器按 pending 处理 |
+
+旧书覆盖依赖 WebDAV 条件写入和备份。远端状态读不到、manifest 缺失、OPF identifier 不一致、旧 EPUB 解析失败、并发修改、KOReader hashdocsettings 风险都会进入 pending。
+
+## 文档地图
+
+| 文档 | 作用 |
+|---|---|
+| [系统架构](docs/architecture.md) | 当前 Hermes 书务系统的模块、数据流和安全边界 |
+| [处理管线](docs/pipeline.md) | TXT/EPUB 输入、检查、元数据增强、发布和后续 LLM 清洗方向 |
+| [MCP 规格](docs/mcp-specs.md) | 把当前 Python 能力封装成工具接口的规划 |
+| [Kindle/KOReader 配置](docs/kindle-setup.md) | 阅读端配置、WebDAV、metadata location 与进度保护 |
+| [阅读节律](docs/daily-reading-rhythm.md) | 这套系统在日常阅读中的使用方式 |
+| [设备选择](docs/buying-guide.md) | KPW5、KPW6、Kobo 与 Apple 设备的阅读工作流差异 |
+| [Apple 兼容性](docs/apple-compatibility.md) | iPhone/iPad/Mac 接入现有 EPUB/WebDAV/标注流的方式 |
+| [归档文档](archived/) | 旧方案备忘，保留参考，不作为当前手册 |
+
+## 开发验证
+
+常用验证命令：
 
 ```powershell
-# 在 $env:USERPROFILE\.claude\.env 或系统环境变量中设置:
-$env:NEW_API_KEY = "sk-your-key"       # New API 网关密钥
-$env:NEW_API_BASE = "https://你的网关地址/v1"
-$env:WEBDAV_PASSWORD = "your-password"  # WebDAV 鉴权密码
-$env:CALIBRE_LIBRARY = "D:\Calibre 书库"  # Calibre 书库路径
+python -m unittest tests.hermes_books.test_assets tests.hermes_books.test_build_txt tests.hermes_books.test_diff tests.hermes_books.test_inspect tests.hermes_books.test_intake tests.hermes_books.test_metadata tests.hermes_books.test_models_config tests.hermes_books.test_opf_metadata tests.hermes_books.test_publish tests.hermes_books.test_sources
+python -m compileall scripts\hermes_books tests\hermes_books
+python -m scripts.hermes_books.intake --help
+git diff --check HEAD
 ```
 
-## 设备状态
+## 关联项目
 
-| 设备 | 系统 | 角色 |
-|---|---|---|
-| Kindle PW5 (第 11 代) | KOReader (越狱) | 主力阅读终端 |
-| Kobo Clara BW | KOReader (原生安装) | 外出副机 [📋 计划] |
+| 仓库 | 说明 |
+|---|---|
+| [dorm-workstation](https://github.com/ShizkMoon/dorm-workstation) | 物理工位、设备布局和宿舍环境 |
+| [ai-workstation](https://github.com/ShizkMoon/ai-workstation) | AI 网关、模型路由、云端工具链和日常自动化 |
 
 ## 参考
 
-- [书伴 bookfere.com](https://bookfere.com/novice) — Kindle 折腾百科全书
 - [KOReader User Guide](https://koreader.rocks/user_guide/)
-- [calibremcp](https://github.com/sandraschi/calibremcp) — Calibre MCP Server
-- [EPUBCheck (W3C)](https://github.com/w3c/epubcheck)
-- [Sigil Plugin Framework](https://github.com/Sigil-Ebook/Sigil/blob/master/docs/Sigil_Plugin_Framework_rev15.epub)
-- [OpenCC](https://github.com/BYVoid/OpenCC) — 中文简繁转换
-- [WinterBreak](https://kindlemodding.org/) — KPW5 越狱方案
-- [iFixit KPW5](https://www.ifixit.com/Device/Kindle_Paperwhite_11th_Generation)
+- [EPUBCheck](https://github.com/w3c/epubcheck)
+- [ebooklib](https://github.com/aerkalov/ebooklib)
+- [Calibre Manual](https://manual.calibre-ebook.com/)
+- [OpenCC](https://github.com/BYVoid/OpenCC)
+- [WinterBreak](https://kindlemodding.org/)

@@ -1,158 +1,115 @@
-# 阅读器选购建议
+# 阅读设备选择备忘
 
-> 已持有 KPW5 的前提下，是否值得升级或换门？
+这份备忘只从 Hermes 工作流角度比较设备：EPUB 支持、KOReader、WebDAV、旧书更新和标注流。硬件价格、固件可越狱性和在售状态变化很快，购买前要重新确认。
 
----
+## 当前结论
 
-## 三款候选
+已有 Kindle PW5 的前提下，不急着换。Hermes 的核心输出是 EPUB + WebDAV，PW5 上的 KOReader 已经能承接这条链路。真正需要升级的理由不是“自动化跑不动”，而是屏幕尺寸、翻页键、防水、重量或设备生态偏好。
 
-| 规格 | KPW5 (11th, 2021) | KPW6 (12th, 2024) | Kobo Clara BW (2024) |
-|---|---|---|---|
-| 屏幕 | 6.8" Carta 1200 | **7.0" Carta 1300** | 6.0" Carta 1300 |
-| PPI | 300 | 300 | 300 |
-| 前光 | 暖光可调 (17 LED) | 暖光可调 | 暖光可调 (ComfortLight PRO) |
-| 防水 | IPX8 | IPX8 | IPX8 |
-| 接口 | USB-C | USB-C | USB-C |
-| 存储 | 8/16/32GB | 16/32GB | 16GB |
-| 电池 | 1700 mAh / 10 周 | 1900 mAh / **12 周** | 1500 mAh / ~6 周 |
-| 重量 | 205g | 211g | **174g** |
-| 屏幕类型 | 纯平 | 纯平 | 凹陷式 |
-| 处理器 | — | 快 25% | 与 KPW6 相当 |
-| 价格 | 已持有 | $160-200 | $130-140 |
-| 越狱 | WinterBreak | 需确认固件 | **不需要——KOReader 直接安装** |
+## 判断标准
 
----
-
-## 逐台分析
-
-### KPW6 (12th Gen)：不值得升级
-
-KPW5 到 KPW6 的代际提升极其有限：
-
-- 屏幕从 6.8" → 7.0"，差异 0.2 英寸。多显示两行字。
-- 处理器快 25%，但 KPW5 升级到最新固件（5.17.1）后翻页速度与 KPW6 持平——软件优化的功劳，不是硬件的。
-- 电池从 10 周 → 12 周。在开飞行模式读 EPUB 的场景下，两者都能轻松撑一个多月，差异无感知。
-- 充电从 5 小时 → 2.5 小时。但 Kindle 的充电频率是"月"级别——这个提升对实际体验影响极小。
-
-**更关键的问题**：KPW6 首发批次存在屏幕品控问题。约 10% 的用户报告屏幕底部有黄色条带（yellow banding），与 Kindle Colorsoft 的黄屏问题是同一时期的品控事故。Android Police 评测直接给了 6.5/10，原因是"能不能抽到好屏幕全看运气"。
-
-> 如果你在用 KPW5，KPW6 没有任何值得花 $160 的理由。省下这笔钱。
-
-### Kobo Clara BW：如果今天从零买，它会赢
-
-Clara BW 有几个对这套工作流至关重要的优势：
-
-**1. KOReader 不需要越狱。** Kobo 固件本质是 Linux，对第三方软件的态度是"不拦着你"。装 KOReader 的步骤就是解压几个文件、运行安装脚本——五分钟，不需要任何漏洞利用。这意味着永远不用担心固件升级堵死越狱路径。
-
-**2. EPUB 是原生格式。** Kobo 原生支持 15 种格式，EPUB 是核心——不需要 Calibre 转换、不需要担心兼容性。这和"越狱后的 KPW5 + KOReader"效果相同，但少了一步越狱。
-
-**3. 和 Calibre 的整合好得多。** Kobo 的数据库结构对 Calibre 友好，元数据同步、丛书管理、标签整理都比 Kindle 顺畅。MobileRead 论坛上的共识是"Kobo + Calibre 是电子书管理的最佳组合"。
-
-**4. 图书馆借阅内置。** OverDrive/Libby 直接集成在系统里——在设备上搜书、借阅、归还。Kindle 也能用 Libby，但需要先在手机 App 上借、再选"Send to Kindle"——每次多几步。
-
-**5. 无广告。** Kobo 不卖广告版。首页可能有书籍推荐，但可以通过 Sideloaded Mode（编辑一个文本文件，不是破解）完全关掉。Kindle 要花 $20 去广告。
-
-**6. 排版控制更强。** 出厂就支持侧载字体、独立调节行高/字重/对齐/连字符。Kindle 原生系统这方面限制更多——当然，如果你在两者上都用 KOReader，这条差异消失。
-
-**Clara BW 的缺点：**
-- 屏幕只有 6 英寸——比 KPW5 的 6.8 英寸小了一圈。这是一个真正的取舍：更便携但每页显示更少。
-- 凹陷式屏幕（非纯平）。纯平屏幕视觉上更高级，但凹陷式反光更少、指纹更不明显。
-- 没有蓝牙/Audible。如果你听有声书，这是硬伤。
-- 电池 6 周 vs KPW5 的 10 周。日常感知不明显，但长途旅行有差距。
-- Kobo 书城比 Kindle Store 小。但你不打算从任何书城买书——EPUB 来源是自建的——所以这条不构成影响。
-
----
-
-## 对当前工作流的适配分析
-
-你的实际场景：
-
-```
-EPUB 唯一格式
-→ Calibre 本地管理
-→ WebDAV / USB 传书
-→ KOReader 阅读
-→ HighlightSync → WebDAV → Agent 标注处理
-→ 不使用任何云同步服务
-```
-
-| 适配维度 | KPW5（越狱后） | KPW6（越狱后） | Kobo Clara BW（装 KOReader） |
-|---|---|---|---|
-| EPUB 原生支持 | ❌ → KOReader 解决 | ❌ → KOReader 解决 | ✅ 原生支持 |
-| KOReader 安装 | 需要越狱 | 需要越狱（固件待确认） | 直接安装，5 分钟 |
-| 固件升级风险 | 可能堵死越狱 | 可能堵死越狱 | 不堵——官方不拦 |
-| WebDAV 传书 | KOReader Cloud Storage | 同左 | KOReader Cloud Storage |
-| 标注导出 | KOReader 内置 JSON | 同左 | 同左 |
-| Calibre 整合 | calibremcp | 同左 | 原生更好 |
-
----
-
-## 结论：双机策略
-
-### 主力机：KPW5（已有）
-
-不换。6.8 英寸、暖光、USB-C、防水——越狱后 KOReader 接管一切。放在床头，每天晚上读。这是沉浸式阅读的设备——大屏幕、双手持握、连续读两小时不累。
-
-### 副机：Kobo Clara BW（推荐购入）
-
-> 彩色墨水屏当前技术不成熟——Kaleido 3 的底色偏灰、对比度不如 Carta、色彩饱和度低。在 6-7 英寸级别上，彩色墨水屏带来的体验提升远不如牺牲的对比度。等这代技术成熟再说。
-
-Clara BW 作为"外出机"的参数恰好成立：
-
-| Clara BW 特性 | 为什么适合外出 |
+| 标准 | 为什么重要 |
 |---|---|
-| 174g | 比 KPW5 轻 31g，比大多数手机还轻 |
-| 6 英寸 | 牛仔裤后袋、外套内袋、背包侧袋——真正能随身 |
-| 凹陷式屏幕 | 反光比纯平少、指纹不明显、裸奔不心疼 |
-| KOReader 直接装 | 不需要越狱，5 分钟配好，固件升级不堵路 |
-| Kobo + Calibre 整合 | 原生 EPUB 支持，元数据同步比 Kindle 顺畅 |
-| $130-140 | 外出丢/摔的心理负担远低于 KPW5 |
+| KOReader 可用性 | Hermes 以 KOReader 为主要阅读端 |
+| EPUB 体验 | Hermes 输出 EPUB，不走 Kindle 私有格式 |
+| WebDAV 支持 | Cloud Storage 是最直接的取书方式 |
+| 本地状态可控 | 旧书更新依赖路径、文件名和 metadata location |
+| 标注导出 | 后续知识管线需要稳定导出 |
+| 文件系统开放程度 | 影响 sidecar、同步和排障 |
 
-两台设备用 Syncthing（KOSyncthing+ 插件）自动同步阅读进度和标注。床上放下 KPW5，第二天出门拿起 Clara BW，翻开就是昨晚停下的那一页。标注也在——HighlightSync 的 WebDAV 目标可以配置为同一台服务器，两台设备的标注汇入同一个 JSON 文件，Agent 处理管线不需要知道设备切换了。
+## Kindle PW5
 
-### 具体场景
+优势：
 
-```
-在家 / 睡前：
-  KPW5（床头，6.8"，暖光 14，连续读两小时）
-      │
-      │ Syncthing 自动同步
-      ▼
-外出 / 通勤 / 课间 / 食堂排队：
-  Clara BW（背包/口袋，6"，174g，单手可握）
-      │
-      │ Syncthing 自动同步
-      ▼
-回家：
-  KPW5 翻开 → 进度已同步 → 继续读
-```
+- 屏幕和续航足够长期阅读。
+- 越狱后可用 KOReader。
+- 现有设备无需迁移。
+- Hermes 的 `/books` + Cloud Storage 流程已经适配。
 
-两台设备上都是 KOReader，体验一致。字体、排版、CSS Tweaks 配置可以通过 Syncery 的 render settings 同步——你在 KPW5 上调好的 Bookerly 字号 5、暖光 14、行距中，Clara BW 上完全一致。
+限制：
 
-### 关于彩色墨水屏
+- 越狱和固件状态需要维护。
+- 文件系统和插件环境比 Kobo 更绕。
+- Kindle 原生系统的进度与 KOReader 进度互不共享。
 
-暂时不碰。Kaleido 3 的底色偏灰——135 PPI 的彩色滤光层叠在 300 PPI 的黑白层上，导致黑白文字对比度下降。彩色饱和度低，画面像褪色印刷品。在 6-7 英寸这个尺寸级别上，漫画和 PDF 图表是唯一能从彩色中获益的场景，但屏幕太小了——看漫画不如 iPad mini，看 PDF 不如 iPad 或电脑。
+适合：
 
-等技术成熟再考虑。可能是 Kobo 的下一代彩色面板，可能是 E Ink Gallery 3 的量产版，但不是现在。
+- 继续作为主力床头阅读器。
+- 优先把 Hermes 管线做稳，而不是换设备。
 
-### 远期：KPW5 退役后的升级路径
+## 新 Kindle
 
-如果将来 KPW5 出问题或电池衰退到不可接受，主力机的接替选项：
+要重点确认：
 
-1. **Kobo Libra 系列**（7 英寸 + 物理翻页键）——最自然的升级。屏幕尺寸不变，多了翻页键，KOReader 直接装。目前是 Libra Colour（彩色版），等它出黑白版或下一代。
-2. **等 Kobo 出 7 英寸黑白旗舰**——Clara BW 证明了 Kobo 做黑白机的功力。如果他们把 Carta 1300 放到 7 英寸、加上翻页键、去掉彩色滤光层，这就是完美的主力机。
-3. **Boox Page / Leaf**（7 英寸 + Android）——可以装任何阅读 App，但 Android 的功耗管理和 E Ink 刷新策略不如 Kobo/Kindle 的原生系统精细。不优先考虑。
+- 当前固件是否可越狱。
+- KOReader 是否能稳定安装。
+- Cloud Storage、字体、插件是否正常。
 
-但现在不急。KPW5 的电池才用了不到一年，E Ink 屏幕的寿命以十年计。让它服役。
+如果不能稳定跑 KOReader，新 Kindle 对 Hermes 的价值会下降。Hermes 不依赖亚马逊云，也不把 Send to Kindle 当主链路。
 
----
+## Kobo
 
-## 参考
+优势：
 
-- [Ars Technica: KPW6 Review](https://arstechnica.com/gadgets/2024/11/review-amazons-2024-kindle-paperwhite-makes-the-best-e-reader-a-little-better/)
-- [The Verge: KPW6 Review](https://www.theverge.com/24326185/amazon-kindle-paperwhite-signature-edition-2024-e-reader-review)
-- [Android Police: KPW6 Review (6.5/10)](https://www.androidpolice.com/kindle-paperwhite-2024-review/)
-- [How-To Geek: Kobo + KOReader](https://www.howtogeek.com/my-ancient-kobo-ereader-is-now-better-than-a-new-kindle/)
-- [Trusted Reviews: Kobo Clara BW](https://www.trustedreviews.com/reviews/kobo-clara-bw)
-- [Boredom at Work: KPW vs Kobo Clara](https://boredom-at-work.com/kindle-paperwhite-vs-kobo-clara/)
-- [MobileRead: Kobo vs Kindle discussion](https://www.mobileread.com/forums/showthread.php?p=4493179)
+- 一般更适合开放文件工作流。
+- EPUB 原生体验更自然。
+- KOReader 安装通常更直接。
+
+需要确认：
+
+- 具体型号的屏幕、重量和翻页体验。
+- 与现有 Syncthing/WebDAV/标注导出方案的配合。
+- 多设备阅读时 metadata location 和路径是否一致。
+
+Kobo 更像“第二台开放阅读端”，不是 Hermes 的必要条件。
+
+## iPad / iPhone / Mac
+
+Apple 设备适合补充，不适合替代 E Ink 长读。
+
+适合：
+
+- 快速检查 EPUB。
+- 浏览 pending reports。
+- 阅读图文、PDF 或技术文档。
+- 管理 WebDAV 文件。
+
+不适合：
+
+- 替代夜间长篇阅读。
+- 无缝复用 KOReader 的本地 `.sdr` 状态。
+
+详见 [Apple 兼容性](apple-compatibility.md)。
+
+## 多设备同步风险
+
+多设备不是只同步 EPUB 文件。真正麻烦的是状态：
+
+- 阅读进度。
+- 书签。
+- 标注。
+- 每本书的渲染设置。
+- KOReader metadata location。
+
+如果两台设备的本地路径、书名、文件 hash 或 docsettings 策略不同，同一本书可能被识别为两本书。Hermes 当前只保证 WebDAV 端发布安全，不保证所有设备本地状态自动迁移。
+
+## 推荐路线
+
+| 场景 | 建议 |
+|---|---|
+| 现在已有 PW5 | 继续用，先把 Hermes 管线做稳 |
+| 想要开放系统 | 评估 Kobo |
+| 想要大屏批注 | iPad 作为辅助 |
+| 想要无折腾 | 暂时不要追新 Kindle 越狱 |
+| 想要多设备同步 | 先设计状态同步，再买设备 |
+
+## 购买前检查清单
+
+- 能否稳定运行 KOReader。
+- 是否支持 WebDAV 或至少能访问 WebDAV 文件。
+- 字体和 CSS 控制是否足够。
+- 标注能否导出。
+- 设备文件系统是否方便排障。
+- 是否会迫使 Hermes 改输出格式。
+
+只要答案仍然是 EPUB + WebDAV + KOReader，Hermes 主线就不用变。
