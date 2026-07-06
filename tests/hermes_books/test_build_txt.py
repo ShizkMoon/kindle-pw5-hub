@@ -97,6 +97,41 @@ class TxtBuildTests(unittest.TestCase):
                 self.assertEqual(names.count("EPUB/styles/hermes-normalized.css"), 1)
                 self.assertNotIn("EPUB/styles/hermes-normalized-2.css", names)
 
+    def test_epub_input_normalization_does_not_upgrade_opf_version_without_nav_guarantee(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "source.epub"
+            book = epub.EpubBook()
+            book.set_identifier("urn:test:source")
+            book.set_title("Book")
+            book.set_language("zh")
+            book.add_author("Author")
+            chapter = epub.EpubHtml(title="第一章", file_name="chapters/ch0001.xhtml", lang="zh")
+            chapter.content = (
+                "<?xml version='1.0' encoding='utf-8'?>"
+                "<html xmlns='http://www.w3.org/1999/xhtml'><head><title>第一章</title></head>"
+                "<body><h2>第一章</h2><p>正文</p></body></html>"
+            ).encode("utf-8")
+            book.add_item(chapter)
+            book.toc = [epub.Link(chapter.file_name, "第一章", "ch0001")]
+            book.spine = [chapter]
+            book.add_item(epub.EpubNcx())
+            epub.write_epub(str(source), book)
+
+            with zipfile.ZipFile(source, "r") as archive:
+                entries = {name: archive.read(name) for name in archive.namelist()}
+            opf = entries["EPUB/content.opf"].decode("utf-8").replace('version="3.0"', 'version="2.0"', 1)
+            entries["EPUB/content.opf"] = opf.encode("utf-8")
+            with zipfile.ZipFile(source, "w") as archive:
+                for name, content in entries.items():
+                    archive.writestr(name, content)
+
+            job = BookJob.from_input(source, "Book", "Author", root / "runs")
+            normalized = normalize_existing_epub(job, source, root / "normalized")
+
+            with zipfile.ZipFile(normalized) as archive:
+                self.assertIn('version="2.0"', archive.read("EPUB/content.opf").decode("utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

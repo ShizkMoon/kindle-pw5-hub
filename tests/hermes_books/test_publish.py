@@ -153,7 +153,7 @@ class PublishTests(unittest.TestCase):
             self.assertTrue((webdav / "books/Book - Author.epub").exists())
             self.assertTrue((webdav / "books/Book - Author.hermes.json").exists())
 
-    def test_new_book_supported_client_without_etags_goes_pending_before_live_publish(self):
+    def test_new_book_supported_client_without_etags_stays_local_before_live_publish(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             webdav = root / "webdav"
@@ -199,12 +199,12 @@ class PublishTests(unittest.TestCase):
             publisher = WebDavPublisher(CleanNoEtagNewPublishClient(webdav))
             report = publisher.publish("/books/Book - Author.epub", epub, manifest(UpdateDecision.NEW_BOOK))
 
-            self.assertEqual(report["status"], "pending")
+            self.assertEqual(report["status"], "pending-local")
             self.assertIn("PUT response ETags", report["reason"])
             self.assertFalse((webdav / "books/Book - Author.epub").exists())
             self.assertFalse((webdav / "books/Book - Author.hermes.json").exists())
 
-    def test_new_book_http_like_client_that_ignores_if_none_match_goes_pending_before_live_publish(self):
+    def test_new_book_http_like_client_that_ignores_if_none_match_stays_local_before_live_publish(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             webdav = root / "webdav"
@@ -248,7 +248,7 @@ class PublishTests(unittest.TestCase):
             publisher = WebDavPublisher(IgnoringIfNoneMatchClient(webdav))
             report = publisher.publish("/books/Book - Author.epub", epub, manifest(UpdateDecision.NEW_BOOK))
 
-            self.assertEqual(report["status"], "pending")
+            self.assertEqual(report["status"], "pending-local")
             self.assertIn("If-None-Match enforcement", report["reason"])
             self.assertFalse((webdav / "books/Book - Author.epub").exists())
             self.assertFalse((webdav / "books/Book - Author.hermes.json").exists())
@@ -711,7 +711,7 @@ class PublishTests(unittest.TestCase):
             self.assertEqual(remote_epub.read_bytes(), old_epub_bytes)
             self.assertEqual(remote_manifest.read_bytes(), old_manifest_bytes)
 
-    def test_safe_append_http_like_client_that_ignores_if_none_match_goes_pending_before_backup_or_live_write(self):
+    def test_safe_append_http_like_client_that_ignores_if_none_match_stays_local_before_backup_or_live_write(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             webdav = root / "webdav"
@@ -770,12 +770,12 @@ class PublishTests(unittest.TestCase):
                 expected_old_manifest_hash=sha256_bytes(old_manifest_bytes),
             )
 
-            self.assertEqual(report["status"], "pending")
+            self.assertEqual(report["status"], "pending-local")
             self.assertIn("If-None-Match enforcement", report["reason"])
             self.assertEqual(remote_epub.read_bytes(), old_epub_bytes)
             self.assertEqual(remote_manifest.read_bytes(), old_manifest_bytes)
 
-    def test_safe_append_http_like_client_without_put_response_etags_goes_pending_before_touching_old_epub(self):
+    def test_safe_append_http_like_client_without_put_response_etags_stays_local_before_touching_old_epub(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             webdav = root / "webdav"
@@ -833,7 +833,7 @@ class PublishTests(unittest.TestCase):
                 expected_old_manifest_hash=sha256_bytes(old_manifest_bytes),
             )
 
-            self.assertEqual(report["status"], "pending")
+            self.assertEqual(report["status"], "pending-local")
             self.assertIn("PUT response ETags", report["reason"])
             self.assertEqual(remote_epub.read_bytes(), old_epub_bytes)
             self.assertEqual(remote_manifest.read_bytes(), old_manifest_bytes)
@@ -1012,6 +1012,75 @@ class PublishTests(unittest.TestCase):
             self.assertEqual(report["status"], "pending-local")
             self.assertIn("pending upload failed", report["reason"])
             self.assertEqual(report["path"], "/books/Book - Author.epub")
+
+    def test_pending_update_http_like_client_that_ignores_if_none_match_stays_local(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = root / "webdav"
+            epub = root / "candidate.epub"
+            epub.write_bytes(b"new")
+
+            class IgnoringIfNoneMatchClient:
+                supports_new_publish = True
+                supports_existing_overwrite = True
+
+                def __init__(self, client_root):
+                    self.inner = LocalWebDavClient(client_root)
+
+                def stat(self, path):
+                    return self.inner.stat(path)
+
+                def exists(self, path):
+                    return self.inner.exists(path)
+
+                def get(self, path):
+                    return self.inner.get(path)
+
+                def put(self, path, data):
+                    return self.inner.put(path, data)
+
+                def put_if_absent(self, path, data):
+                    self.inner.put(path, data)
+                    return WebDavWriteResult(self.inner.stat(path).etag)
+
+                def put_if_match(self, path, data, etag):
+                    return self.inner.put_if_match(path, data, etag)
+
+                def delete_if_match(self, path, etag):
+                    return self.inner.delete_if_match(path, self.inner.stat(path).etag)
+
+                def mkdir(self, path):
+                    return self.inner.mkdir(path)
+
+            publisher = WebDavPublisher(IgnoringIfNoneMatchClient(webdav))
+            report = publisher.publish("/books/Book - Author.epub", epub, manifest(UpdateDecision.BLOCKED_RISKY))
+
+            self.assertEqual(report["status"], "pending-local")
+            self.assertIn("If-None-Match enforcement", report["reason"])
+            self.assertFalse((webdav / "books/.pending").exists())
+
+    def test_pending_upload_verification_failure_removes_verified_candidate(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = root / "webdav"
+            epub = root / "candidate.epub"
+            epub.write_bytes(b"new")
+
+            class CorruptingPendingManifestClient(LocalWebDavClient):
+                def put_if_absent(self, path, data):
+                    result = super().put_if_absent(path, data)
+                    if path.endswith("/candidate.hermes.json"):
+                        super().put(path, b"corrupt manifest")
+                    return result
+
+            publisher = WebDavPublisher(CorruptingPendingManifestClient(webdav))
+            report = publisher.publish("/books/Book - Author.epub", epub, manifest(UpdateDecision.BLOCKED_RISKY))
+
+            self.assertEqual(report["status"], "pending-local")
+            self.assertIn("pending manifest write could not be verified", report["reason"])
+            pending_root = webdav / "books/.pending"
+            candidate_files = list(pending_root.rglob("candidate.epub")) if pending_root.exists() else []
+            self.assertEqual(candidate_files, [])
 
     def test_safe_overwrite_restores_old_files_and_reports_pending_when_manifest_put_fails(self):
         with tempfile.TemporaryDirectory() as td:

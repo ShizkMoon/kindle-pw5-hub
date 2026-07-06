@@ -757,15 +757,22 @@ class WebDavPublisher:
         candidate_manifest = manifest.to_json().encode("utf-8")
         candidate_hash = hashlib.sha256(candidate_epub).hexdigest()
         pending_root = posixpath.join(posixpath.dirname(target_epub_path), ".pending", slug)
-        pending_name = f"{self.timestamp()}-{candidate_hash[:16]}"
+        pending_name = f"{self.timestamp()}-{candidate_hash[:16]}-{uuid.uuid4().hex[:8]}"
         risk_report = (
             "# Pending update\n\n"
             f"Decision: {decision_value}\n"
             f"Candidate-SHA256: {candidate_hash}\n"
             + (f"Reason: {reason}\n" if reason else "")
         ).encode("utf-8")
+        verified_pending_writes: list[tuple[str, str]] = []
+
+        def cleanup_pending_writes() -> None:
+            while verified_pending_writes:
+                path, etag = verified_pending_writes.pop()
+                self._safe_delete_if_match(path, etag)
 
         def pending_local(error: Exception | str) -> dict[str, str]:
+            cleanup_pending_writes()
             error_message = str(error)
             reason_parts = [part for part in [reason, f"pending upload failed: {error_message}"] if part]
             return {
@@ -775,6 +782,10 @@ class WebDavPublisher:
                 "reason": "; ".join(reason_parts),
             }
 
+        capability_error = self._new_publish_capability_error(target_epub_path)
+        if capability_error is not None:
+            return pending_local(capability_error)
+
         try:
             self.client.mkdir(pending_root)
             for suffix in range(1, 100):
@@ -782,14 +793,42 @@ class WebDavPublisher:
                 pending_dir = posixpath.join(pending_root, directory_name)
                 self.client.mkdir(pending_dir)
                 try:
-                    self.client.put_if_absent(posixpath.join(pending_dir, "candidate.epub"), candidate_epub)
-                    self.client.put_if_absent(
-                        posixpath.join(pending_dir, "candidate.hermes.json"),
-                        candidate_manifest,
+                    candidate_path = posixpath.join(pending_dir, "candidate.epub")
+                    manifest_path = posixpath.join(pending_dir, "candidate.hermes.json")
+                    risk_path = posixpath.join(pending_dir, "risk-report.md")
+                    candidate_write = self.client.put_if_absent(candidate_path, candidate_epub)
+                    candidate_etag = self._verified_after_write(
+                        candidate_path,
+                        candidate_epub,
+                        candidate_write,
+                        require_etag=False,
                     )
-                    self.client.put_if_absent(posixpath.join(pending_dir, "risk-report.md"), risk_report)
+                    if candidate_etag is None:
+                        return pending_local("pending candidate write could not be verified")
+                    verified_pending_writes.append((candidate_path, candidate_etag))
+                    manifest_write = self.client.put_if_absent(manifest_path, candidate_manifest)
+                    manifest_etag = self._verified_after_write(
+                        manifest_path,
+                        candidate_manifest,
+                        manifest_write,
+                        require_etag=False,
+                    )
+                    if manifest_etag is None:
+                        return pending_local("pending manifest write could not be verified")
+                    verified_pending_writes.append((manifest_path, manifest_etag))
+                    risk_write = self.client.put_if_absent(risk_path, risk_report)
+                    risk_etag = self._verified_after_write(
+                        risk_path,
+                        risk_report,
+                        risk_write,
+                        require_etag=False,
+                    )
+                    if risk_etag is None:
+                        return pending_local("pending risk report write could not be verified")
+                    verified_pending_writes.append((risk_path, risk_etag))
                     break
                 except ConditionalWriteFailed:
+                    cleanup_pending_writes()
                     continue
             else:
                 return pending_local("could not reserve a unique pending update path")

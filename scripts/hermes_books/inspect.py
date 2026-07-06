@@ -15,6 +15,7 @@ import ebooklib
 from ebooklib import epub
 
 from .models import ChapterInfo, ImageInfo, QualityIssue
+from .textdecode import decode_css, decode_markup
 
 
 @dataclass
@@ -60,7 +61,6 @@ class _ReaderBodyParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self._body_depth = 0
         self._ignored_depth = 0
-        self._ignored_heading_depth = 0
         self._body_content_seen = False
         self._texts: list[str] = []
         self._structure: list[str] = []
@@ -74,8 +74,7 @@ class _ReaderBodyParser(HTMLParser):
             return
         if self._body_depth and not self._ignored_depth:
             self._structure.append(f"<{self._structure_tag(tag, attrs)}/>")
-            if not self._ignored_heading_depth:
-                self._body_content_seen = True
+            self._body_content_seen = True
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
@@ -84,14 +83,6 @@ class _ReaderBodyParser(HTMLParser):
             return
         if self._ignored_depth:
             return
-        if self._ignored_heading_depth:
-            if tag != "body":
-                self._structure.append(f"</{tag}>")
-            if tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
-                self._ignored_heading_depth -= 1
-                if not self._ignored_heading_depth:
-                    self._body_content_seen = True
-            return
         if self._body_depth and tag != "body":
             self._structure.append(f"</{tag}>")
             self._body_content_seen = True
@@ -99,7 +90,7 @@ class _ReaderBodyParser(HTMLParser):
             self._body_depth -= 1
 
     def handle_data(self, data: str) -> None:
-        if self._body_depth and not self._ignored_depth and not self._ignored_heading_depth:
+        if self._body_depth and not self._ignored_depth:
             self._texts.append(data)
             text = _normalise_text(data)
             if text:
@@ -122,14 +113,9 @@ class _ReaderBodyParser(HTMLParser):
         if tag == "head":
             self._ignored_depth += 1
             return
-        if tag in {"h1", "h2", "h3", "h4", "h5", "h6"} and self._body_depth and not self._body_content_seen:
-            self._structure.append(f"<{self._structure_tag(tag, attrs)}>")
-            self._ignored_heading_depth += 1
-            return
         if self._body_depth and not self._ignored_depth and tag != "body":
             self._structure.append(f"<{self._structure_tag(tag, attrs)}>")
-            if not self._ignored_heading_depth:
-                self._body_content_seen = True
+            self._body_content_seen = True
 
     def _structure_tag(self, tag: str, attrs: list[tuple[str, str | None]]) -> str:
         anchors = []
@@ -149,20 +135,26 @@ def _normalise_text(raw: str) -> str:
 
 def _reader_body_text(raw_html: bytes) -> str:
     parser = _ReaderBodyParser()
-    parser.feed(raw_html.decode("utf-8", errors="replace"))
+    parser.feed(decode_markup(raw_html).text)
     parser.close()
     return parser.text()
 
 
 def _fingerprint(raw_html: bytes) -> tuple[str, int, str]:
     parser = _ReaderBodyParser()
-    parser.feed(raw_html.decode("utf-8", errors="replace"))
+    decoded = decode_markup(raw_html)
+    parser.feed(decoded.text)
     parser.close()
     text = _normalise_text(parser.text())
+    text_chars = len(text)
     structure = parser.structure()
+    if not decoded.reliable:
+        raw_digest = hashlib.sha256(raw_html).hexdigest()
+        text = f"{text}\nraw:{raw_digest}"
+        structure = f"{structure}\nraw:{raw_digest}"
     return (
         hashlib.sha256(text.encode("utf-8")).hexdigest(),
-        len(text),
+        text_chars,
         hashlib.sha256(structure.encode("utf-8")).hexdigest(),
     )
 
@@ -401,7 +393,7 @@ def _resource_references(raw_html: bytes) -> list[str]:
                     self.inline_css.append(value)
 
     parser = ReferenceParser()
-    parser.feed(raw_html.decode("utf-8", errors="replace"))
+    parser.feed(decode_markup(raw_html).text)
     parser.close()
     for css in parser.inline_css:
         parser.references.extend(_css_url_references(css))
@@ -431,12 +423,21 @@ def _normalise_resource_reference(raw_reference: str, base_dir: str) -> str:
 
 
 def _css_url_references(css: bytes | str) -> list[str]:
-    text = css.decode("utf-8", errors="replace") if isinstance(css, bytes) else css
-    return [
+    text = decode_css(css).text if isinstance(css, bytes) else css
+    references = [
         match.group(2).strip()
         for match in re.finditer(r"url\(\s*(['\"]?)(.*?)\1\s*\)", text, re.IGNORECASE)
         if match.group(2).strip()
     ]
+    for match in re.finditer(
+        r"@import\s+(?:url\(\s*)?(?:(['\"])(.*?)\1|([^;\s\)]+))",
+        text,
+        re.IGNORECASE,
+    ):
+        reference = (match.group(2) or match.group(3) or "").strip()
+        if reference:
+            references.append(reference)
+    return references
 
 
 def _resource_fingerprint(
@@ -634,7 +635,7 @@ def inspect_epub(path: Path) -> EpubInspection:
                 report.missing_cover = False
             report.images.append(ImageInfo(href, media_type, len(item.get_content()), role))
         elif media_type == "text/css":
-            css = item.get_content().decode("utf-8", errors="replace")
+            css = decode_css(item.get_content()).text
             report.issues.extend(_css_issues(href, css))
 
     if not report.chapters:

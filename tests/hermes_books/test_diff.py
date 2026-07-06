@@ -23,6 +23,35 @@ def rewrite_chapter(epub_path: Path, chapter_path: str, replace: tuple[str, str]
             target.writestr(name, content)
 
 
+def rewrite_chapter_bytes(epub_path: Path, chapter_path: str, content: bytes) -> None:
+    with zipfile.ZipFile(epub_path, "r") as source:
+        entries = {name: source.read(name) for name in source.namelist()}
+
+    entries[f"EPUB/{chapter_path}"] = content
+
+    with zipfile.ZipFile(epub_path, "w") as target:
+        for name, entry_content in entries.items():
+            target.writestr(name, entry_content)
+
+
+def encoded_chapter(heading: str, body: str, encoding: str) -> bytes:
+    return (
+        f"<?xml version='1.0' encoding='{encoding}'?>\n"
+        "<html xmlns='http://www.w3.org/1999/xhtml' xml:lang='zh'>"
+        f"<head><title>{heading}</title></head>"
+        f"<body><h2>{heading}</h2><p>{body}</p></body></html>"
+    ).encode(encoding)
+
+
+def utf16le_no_bom_chapter(heading: str, body: str) -> bytes:
+    return (
+        "\n<!DOCTYPE html>\n"
+        "<html xmlns='http://www.w3.org/1999/xhtml' xml:lang='en'>"
+        f"<head><title>{heading}</title></head>"
+        f"<body><h2>{heading}</h2><p>{body}</p></body></html>"
+    ).encode("utf-16-le")
+
+
 def rewrite_opf(epub_path: Path, replace: tuple[str, str]) -> None:
     with zipfile.ZipFile(epub_path, "r") as source:
         entries = {name: source.read(name) for name in source.namelist()}
@@ -241,7 +270,7 @@ class DiffTests(unittest.TestCase):
             self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
             self.assertIn("old EPUB has no comparable chapters", result.reasons)
 
-    def test_title_only_heading_only_change_with_same_body_is_safe_metadata(self):
+    def test_title_heading_change_with_same_body_is_blocked(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             old = inspect_epub(make_epub(root / "old.epub", chapters=[("第一章", "same body")]))
@@ -251,7 +280,8 @@ class DiffTests(unittest.TestCase):
 
             result = compare_for_update(manifest(), manifest(title="Book Revised"), old, new)
 
-            self.assertEqual(result.decision, UpdateDecision.SAFE_METADATA)
+            self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
+            self.assertIn("chapter 1 fingerprint changed", result.reasons)
 
     def test_initial_title_heading_anchor_change_is_blocked(self):
         with tempfile.TemporaryDirectory() as td:
@@ -566,6 +596,121 @@ class DiffTests(unittest.TestCase):
 
             self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
             self.assertIn("chapter 1 resources changed", result.reasons)
+
+    def test_same_text_with_changed_css_import_dependency_is_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            css = '@import "theme.css"; p { line-height: 1.6; }'
+            old_path = make_epub(root / "old.epub", chapters=[("第一章", "same body")], css=css)
+            new_path = make_epub(root / "new.epub", chapters=[("第一章", "same body")], css=css)
+            add_resource(old_path, "styles/theme.css", b".novel { color: black; }", "text/css")
+            add_resource(new_path, "styles/theme.css", b".novel { color: red; }", "text/css")
+            old = inspect_epub(old_path)
+            new = inspect_epub(new_path)
+
+            self.assertEqual(old.chapters[0].fingerprint, new.chapters[0].fingerprint)
+            self.assertNotEqual(
+                old.chapters[0].resource_fingerprint,
+                new.chapters[0].resource_fingerprint,
+            )
+
+            result = compare_for_update(manifest(), manifest(), old, new)
+
+            self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
+            self.assertIn("chapter 1 resources changed", result.reasons)
+
+    def test_same_text_with_changed_css_import_url_dependency_is_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            css = "@import url(theme.css); p { line-height: 1.6; }"
+            old_path = make_epub(root / "old.epub", chapters=[("第一章", "same body")], css=css)
+            new_path = make_epub(root / "new.epub", chapters=[("第一章", "same body")], css=css)
+            add_resource(old_path, "styles/theme.css", b".novel { color: black; }", "text/css")
+            add_resource(new_path, "styles/theme.css", b".novel { color: red; }", "text/css")
+            old = inspect_epub(old_path)
+            new = inspect_epub(new_path)
+
+            self.assertNotEqual(
+                old.chapters[0].resource_fingerprint,
+                new.chapters[0].resource_fingerprint,
+            )
+
+            result = compare_for_update(manifest(), manifest(), old, new)
+
+            self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
+            self.assertIn("chapter 1 resources changed", result.reasons)
+
+    def test_same_text_with_changed_bare_css_import_dependency_is_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            css = "@import theme.css; p { line-height: 1.6; }"
+            old_path = make_epub(root / "old.epub", chapters=[("第一章", "same body")], css=css)
+            new_path = make_epub(root / "new.epub", chapters=[("第一章", "same body")], css=css)
+            add_resource(old_path, "styles/theme.css", b".novel { color: black; }", "text/css")
+            add_resource(new_path, "styles/theme.css", b".novel { color: red; }", "text/css")
+            old = inspect_epub(old_path)
+            new = inspect_epub(new_path)
+
+            self.assertNotEqual(
+                old.chapters[0].resource_fingerprint,
+                new.chapters[0].resource_fingerprint,
+            )
+
+            result = compare_for_update(manifest(), manifest(), old, new)
+
+            self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
+            self.assertIn("chapter 1 resources changed", result.reasons)
+
+    def test_gbk_encoded_chapter_text_change_is_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            old_path = make_epub(root / "old.epub", chapters=[("第一章", "占位")])
+            new_path = make_epub(root / "new.epub", chapters=[("第一章", "占位")])
+            rewrite_chapter_bytes(old_path, "chapters/ch0001.xhtml", encoded_chapter("第一章", "旧文本", "gbk"))
+            rewrite_chapter_bytes(new_path, "chapters/ch0001.xhtml", encoded_chapter("第一章", "新文本", "gbk"))
+            old = inspect_epub(old_path)
+            new = inspect_epub(new_path)
+
+            self.assertNotEqual(old.chapters[0].fingerprint, new.chapters[0].fingerprint)
+
+            result = compare_for_update(manifest(), manifest(), old, new)
+
+            self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
+            self.assertIn("chapter 1 fingerprint changed", result.reasons)
+
+    def test_utf16le_no_bom_chapter_text_change_is_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            old_path = make_epub(root / "old.epub", chapters=[("Title", "placeholder")])
+            new_path = make_epub(root / "new.epub", chapters=[("Title", "placeholder")])
+            rewrite_chapter_bytes(old_path, "chapters/ch0001.xhtml", utf16le_no_bom_chapter("Title", "old text"))
+            rewrite_chapter_bytes(new_path, "chapters/ch0001.xhtml", utf16le_no_bom_chapter("Title", "new text"))
+            old = inspect_epub(old_path)
+            new = inspect_epub(new_path)
+
+            self.assertNotEqual(old.chapters[0].fingerprint, new.chapters[0].fingerprint)
+
+            result = compare_for_update(manifest(), manifest(), old, new)
+
+            self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
+            self.assertIn("chapter 1 fingerprint changed", result.reasons)
+
+    def test_utf16_encoded_chapter_text_change_is_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            old_path = make_epub(root / "old.epub", chapters=[("第一章", "占位")])
+            new_path = make_epub(root / "new.epub", chapters=[("第一章", "占位")])
+            rewrite_chapter_bytes(old_path, "chapters/ch0001.xhtml", encoded_chapter("第一章", "旧文本", "utf-16"))
+            rewrite_chapter_bytes(new_path, "chapters/ch0001.xhtml", encoded_chapter("第一章", "新文本", "utf-16"))
+            old = inspect_epub(old_path)
+            new = inspect_epub(new_path)
+
+            self.assertNotEqual(old.chapters[0].fingerprint, new.chapters[0].fingerprint)
+
+            result = compare_for_update(manifest(), manifest(), old, new)
+
+            self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
+            self.assertIn("chapter 1 fingerprint changed", result.reasons)
 
     def test_same_text_with_inline_style_url_dependency_is_blocked(self):
         with tempfile.TemporaryDirectory() as td:

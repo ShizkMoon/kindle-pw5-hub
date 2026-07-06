@@ -64,6 +64,69 @@ def _manifest_from_inspection(
     )
 
 
+def _failed_before_inspection_result(
+    job: BookJob,
+    source_hash: str,
+    output_epub: Path,
+    reports_dir: Path,
+    error: Exception,
+) -> IntakeResult:
+    reason = f"intake failed before EPUB inspection: {error}"
+    issue = {
+        "severity": "HIGH",
+        "code": "INTAKE_FAILED_BEFORE_INSPECTION",
+        "message": reason,
+        "href": str(output_epub),
+    }
+    canonical_id = canonical_id_for(job.title, job.author)
+    output_hash = sha256_file(output_epub) if output_epub.exists() and output_epub.is_file() else ""
+    manifest = BookManifest(
+        canonical_id=canonical_id,
+        title=job.title,
+        author=job.author,
+        opf_identifier=f"urn:hermes:{canonical_id}",
+        source_hash=source_hash,
+        output_hash=output_hash,
+        update_decision=UpdateDecision.BLOCKED_RISKY,
+        quality_report={"issues": [issue]},
+    )
+    publish_report = {
+        "status": "blocked",
+        "path": job.webdav_target_path,
+        "reason": reason,
+    }
+
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    (reports_dir / "quality-report.md").write_text(
+        "# EPUB quality report\n\n"
+        f"Title: {job.title}\n"
+        f"Author: {job.author}\n"
+        "Chapters: 0\n"
+        "Images: 0\n"
+        "Missing cover: true\n"
+        "\n"
+        "## Issues\n"
+        f"- [HIGH] INTAKE_FAILED_BEFORE_INSPECTION: {reason} {output_epub}\n",
+        encoding="utf-8",
+    )
+    (reports_dir / "asset-report.json").write_text(
+        json.dumps({"status": "skipped", "reason": reason}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    validation = EpubValidationResult(
+        status="skipped",
+        warnings=[{"id": "INTAKE_FAILED_BEFORE_INSPECTION", "message": reason}],
+        checker="hermes-intake",
+    )
+    (reports_dir / "epubcheck.json").write_text(validation.to_json(), encoding="utf-8")
+    (reports_dir / "manifest.json").write_text(manifest.to_json(), encoding="utf-8")
+    (reports_dir / "publish-report.json").write_text(
+        json.dumps(publish_report, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return IntakeResult(job, output_epub, manifest, reports_dir, publish_report)
+
+
 def _valid_books_path(path: str) -> str:
     normalised = "/" + path.replace("\\", "/").strip("/")
     parts = [part for part in normalised.split("/") if part]
@@ -192,15 +255,25 @@ def run_intake(
     paths = prepare_run_workspace(job)
     snapshot = LocalFileSource(job).snapshot()
 
-    if job.input_format == "txt":
-        candidate = build_draft_from_txt(job, snapshot.raw_path, paths.draft_dir)
-        output_epub = normalize_existing_epub(job, candidate, paths.normalized_dir)
-    elif job.input_format == "epub":
-        output_epub = normalize_existing_epub(job, snapshot.raw_path, paths.normalized_dir)
-    else:
-        raise ValueError(f"Unsupported input format for MVP: {job.input_format}")
+    output_epub = snapshot.raw_path
+    try:
+        if job.input_format == "txt":
+            candidate = build_draft_from_txt(job, snapshot.raw_path, paths.draft_dir)
+            output_epub = normalize_existing_epub(job, candidate, paths.normalized_dir)
+        elif job.input_format == "epub":
+            output_epub = normalize_existing_epub(job, snapshot.raw_path, paths.normalized_dir)
+        else:
+            raise ValueError(f"Unsupported input format for MVP: {job.input_format}")
 
-    inspection = inspect_epub(output_epub)
+        inspection = inspect_epub(output_epub)
+    except Exception as exc:
+        return _failed_before_inspection_result(
+            job,
+            snapshot.source_hash,
+            output_epub,
+            paths.reports_dir,
+            exc,
+        )
 
     asset_cache_dir = job.run_dir / "assets-cache"
     asset_report = AssetEnricher(config.asset_enrichment, asset_provider).plan(

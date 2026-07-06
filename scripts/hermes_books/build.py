@@ -19,6 +19,7 @@ from scripts.txt2epub.pipeline import (
 )
 
 from .models import BookJob, canonical_id_for
+from .textdecode import decode_markup
 
 
 NORMALIZED_EPUB_CSS = """
@@ -151,7 +152,10 @@ def _relative_href(target_href: str, source_href: str) -> str:
 
 
 def _inject_stylesheet_link(raw_html: bytes, stylesheet_href: str) -> bytes:
-    text = raw_html.decode("utf-8", errors="replace")
+    decoded = decode_markup(raw_html)
+    if not decoded.reliable:
+        return raw_html
+    text = decoded.text
     if stylesheet_href in text and "stylesheet" in text:
         return raw_html
     link = (
@@ -163,7 +167,10 @@ def _inject_stylesheet_link(raw_html: bytes, stylesheet_href: str) -> bytes:
         text, count = re.subn(r"(<body\b)", f"<head>{link}</head>\\1", text, count=1, flags=re.IGNORECASE)
     if count == 0:
         text += link
-    return text.encode("utf-8")
+    try:
+        return text.encode(decoded.encoding)
+    except LookupError:
+        return raw_html
 
 
 def normalize_existing_epub(job: BookJob, raw_epub_path: Path, normalized_dir: Path) -> Path:
@@ -179,9 +186,6 @@ def normalize_existing_epub(job: BookJob, raw_epub_path: Path, normalized_dir: P
     if namespace:
         ElementTree.register_namespace("", namespace)
     q = lambda name: _opf_tag(namespace, name)
-
-    if not opf_root.attrib.get("version", "").startswith("3"):
-        opf_root.set("version", "3.0")
 
     manifest = opf_root.find(q("manifest"))
     if manifest is None:

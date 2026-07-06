@@ -49,7 +49,7 @@ class InspectTests(unittest.TestCase):
             self.assertIn("EPUB quality report", text)
             self.assertIn("Chapters: 2", text)
 
-    def test_chapter_fingerprint_ignores_head_title_and_heading_text(self):
+    def test_chapter_fingerprint_includes_visible_heading_text(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             first_path = make_epub(root / "first.epub", chapters=[("Original Heading", "Same body")])
@@ -58,12 +58,12 @@ class InspectTests(unittest.TestCase):
             first = inspect_epub(first_path)
             second = inspect_epub(second_path)
 
-            self.assertEqual(first.chapters[0].fingerprint, second.chapters[0].fingerprint)
-            self.assertEqual(
+            self.assertNotEqual(first.chapters[0].fingerprint, second.chapters[0].fingerprint)
+            self.assertNotEqual(
                 first.chapters[0].structure_fingerprint,
                 second.chapters[0].structure_fingerprint,
             )
-            self.assertEqual(first.chapters[0].text_chars, second.chapters[0].text_chars)
+            self.assertNotEqual(first.chapters[0].text_chars, second.chapters[0].text_chars)
 
     def test_chapter_named_chapter_nav_is_not_skipped(self):
         with tempfile.TemporaryDirectory() as td:

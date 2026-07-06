@@ -72,6 +72,29 @@ class IntakeTests(unittest.TestCase):
             self.assertEqual(result.publish_report["status"], "published")
             self.assertTrue((root / "webdav/books/Book - Author.epub").exists())
 
+    def test_unreadable_source_epub_writes_local_failure_reports_without_publishing(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source_epub = root / "broken.epub"
+            source_epub.write_bytes(b"not an epub archive")
+
+            result = run_intake(
+                input_path=source_epub,
+                title="Book",
+                author="Author",
+                runs_root=root / "runs",
+                config=no_network_config(),
+                webdav_client=LocalWebDavClient(root / "webdav"),
+            )
+
+            self.assertEqual(result.publish_report["status"], "blocked")
+            self.assertIn("intake failed before EPUB inspection", result.publish_report["reason"])
+            self.assertEqual(result.manifest.update_decision, UpdateDecision.BLOCKED_RISKY)
+            self.assertFalse((root / "webdav/books/Book - Author.epub").exists())
+            self.assertTrue((result.reports_dir / "quality-report.md").exists())
+            self.assertTrue((result.reports_dir / "manifest.json").exists())
+            self.assertTrue((result.reports_dir / "publish-report.json").exists())
+
     def test_auto_adopted_cover_is_inserted_before_validation_and_publish(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
