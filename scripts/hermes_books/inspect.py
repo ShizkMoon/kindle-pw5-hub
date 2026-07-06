@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from pathlib import Path, PurePosixPath
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 from xml.etree import ElementTree
 
 import ebooklib
@@ -60,6 +60,7 @@ class _ReaderBodyParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self._body_depth = 0
         self._ignored_depth = 0
+        self._body_content_seen = False
         self._texts: list[str] = []
         self._structure: list[str] = []
 
@@ -68,18 +69,24 @@ class _ReaderBodyParser(HTMLParser):
 
     def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         tag = tag.lower()
-        if tag in {"head", "h1", "h2", "h3", "h4", "h5", "h6"}:
+        if tag == "head":
             return
         if self._body_depth and not self._ignored_depth:
             self._structure.append(f"<{self._structure_tag(tag, attrs)}/>")
+            self._body_content_seen = True
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
-        if tag in {"head", "h1", "h2", "h3", "h4", "h5", "h6"} and self._ignored_depth:
+        if tag == "head" and self._ignored_depth:
             self._ignored_depth -= 1
+            return
+        if tag in {"h1", "h2", "h3", "h4", "h5", "h6"} and self._ignored_depth:
+            self._ignored_depth -= 1
+            self._body_content_seen = True
             return
         if self._body_depth and not self._ignored_depth and tag != "body":
             self._structure.append(f"</{tag}>")
+            self._body_content_seen = True
         if tag == "body" and self._body_depth:
             self._body_depth -= 1
 
@@ -89,6 +96,7 @@ class _ReaderBodyParser(HTMLParser):
             text = _normalise_text(data)
             if text:
                 self._structure.append(f"text:{text}")
+                self._body_content_seen = True
 
     def text(self) -> str:
         return "".join(self._texts)
@@ -100,11 +108,15 @@ class _ReaderBodyParser(HTMLParser):
         tag = tag.lower()
         if tag == "body":
             self._body_depth += 1
-        if tag in {"head", "h1", "h2", "h3", "h4", "h5", "h6"}:
+        if tag == "head":
+            self._ignored_depth += 1
+            return
+        if tag in {"h1", "h2", "h3", "h4", "h5", "h6"} and self._body_depth and not self._body_content_seen:
             self._ignored_depth += 1
             return
         if self._body_depth and not self._ignored_depth and tag != "body":
             self._structure.append(f"<{self._structure_tag(tag, attrs)}>")
+            self._body_content_seen = True
 
     def _structure_tag(self, tag: str, attrs: list[tuple[str, str | None]]) -> str:
         anchors = []
@@ -186,7 +198,9 @@ def _cover_item_ids(book: epub.EpubBook) -> set[str]:
 
 
 def _normalise_epub_href(href: str) -> str:
-    normalised = posixpath.normpath(unquote(href).replace("\\", "/").lstrip("/"))
+    parsed = urlsplit(href)
+    href_path = parsed.path if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment else href
+    normalised = posixpath.normpath(unquote(href_path).replace("\\", "/").lstrip("/"))
     return "" if normalised == "." else normalised
 
 
@@ -281,20 +295,28 @@ def _resource_references(raw_html: bytes) -> list[str]:
     return parser.references
 
 
+def _resource_href(raw_reference: str) -> str:
+    parsed = urlsplit(raw_reference)
+    return parsed.path if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment else raw_reference
+
+
 def _resource_fingerprint(item: epub.EpubItem, resources_by_href: dict[str, epub.EpubItem]) -> str:
     chapter_dir = posixpath.dirname(_normalise_epub_href(str(getattr(item, "file_name", ""))))
     parts: list[str] = []
+    for resource_href, resource in sorted(resources_by_href.items()):
+        if str(getattr(resource, "media_type", "")) == "text/css":
+            parts.append(f"{resource_href}:text/css:{hashlib.sha256(resource.get_content()).hexdigest()}")
     for raw_reference in sorted(set(_resource_references(item.get_content()))):
         if raw_reference.startswith(("http://", "https://", "mailto:")):
             parts.append(f"external:{raw_reference}")
             continue
-        normalised = _normalise_epub_href(posixpath.join(chapter_dir, raw_reference))
+        normalised = _normalise_epub_href(posixpath.join(chapter_dir, _resource_href(raw_reference)))
         referenced = resources_by_href.get(normalised)
         if referenced is None:
             parts.append(f"missing:{normalised}")
             continue
         media_type = str(getattr(referenced, "media_type", ""))
-        if media_type == "application/xhtml+xml" or media_type == "text/css":
+        if media_type == "application/xhtml+xml":
             continue
         content = referenced.get_content()
         parts.append(f"{normalised}:{media_type}:{hashlib.sha256(content).hexdigest()}")
