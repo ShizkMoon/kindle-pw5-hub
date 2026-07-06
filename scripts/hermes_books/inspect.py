@@ -116,6 +116,9 @@ class _ReaderBodyParser(HTMLParser):
         tag = tag.lower()
         if tag == "body":
             self._body_depth += 1
+            if attrs:
+                self._structure.append(f"<{self._structure_tag(tag, attrs)}>")
+            return
         if tag == "head":
             self._ignored_depth += 1
             return
@@ -134,7 +137,7 @@ class _ReaderBodyParser(HTMLParser):
             if key and value:
                 attr = key.lower()
                 anchors.append(f'{attr}="{_normalise_structure_attr(attr, value)}"')
-        return " ".join([tag, *anchors])
+        return " ".join([tag, *sorted(anchors)])
 
 
 def _normalise_text(raw: str) -> str:
@@ -303,6 +306,43 @@ def _epub3_cover_references(path: Path) -> tuple[set[str], set[str]]:
     return cover_ids, cover_hrefs
 
 
+def _epub_raw_entries(path: Path) -> tuple[str, dict[str, bytes]]:
+    container_ns = {"container": "urn:oasis:names:tc:opendocument:xmlns:container"}
+    with zipfile.ZipFile(path) as archive:
+        entries = {name: archive.read(name) for name in archive.namelist()}
+    try:
+        container = ElementTree.fromstring(entries["META-INF/container.xml"])
+        rootfile = container.find(".//container:rootfile", container_ns)
+    except (KeyError, ElementTree.ParseError):
+        return "", entries
+    if rootfile is None:
+        return "", entries
+    return _string_value(rootfile.attrib.get("full-path")), entries
+
+
+def _resource_contents_by_href(opf_path: str, entries: dict[str, bytes]) -> dict[str, bytes]:
+    if not opf_path:
+        return {}
+    opf_dir = posixpath.dirname(_normalise_epub_href(opf_path))
+    prefix = f"{opf_dir}/" if opf_dir else ""
+    contents: dict[str, bytes] = {}
+    for archive_name, content in entries.items():
+        normalised = _normalise_epub_href(archive_name)
+        if prefix and not normalised.startswith(prefix):
+            continue
+        href = normalised[len(prefix):] if prefix else normalised
+        contents[href] = content
+    return contents
+
+
+def _raw_item_content(
+    item: epub.EpubItem,
+    resource_content_by_href: dict[str, bytes],
+) -> bytes:
+    href = _normalise_epub_href(str(getattr(item, "file_name", "")))
+    return resource_content_by_href.get(href, item.get_content())
+
+
 def _is_cover_image(item: epub.EpubItem, cover_item_ids: set[str], cover_hrefs: set[str]) -> bool:
     item_id = _string_value(getattr(item, "id", ""))
     if item_id in cover_item_ids:
@@ -401,7 +441,9 @@ def _css_url_references(css: bytes | str) -> list[str]:
 
 def _resource_fingerprint(
     item: epub.EpubItem,
+    raw_content: bytes,
     resources_by_href: dict[str, epub.EpubItem],
+    resource_content_by_href: dict[str, bytes],
     spine_hrefs: set[str],
 ) -> str:
     chapter_href = _normalise_epub_href(str(getattr(item, "file_name", "")))
@@ -435,7 +477,7 @@ def _resource_fingerprint(
             return
 
         visited.add(normalised)
-        content = referenced.get_content()
+        content = resource_content_by_href.get(normalised, referenced.get_content())
         parts.append(f"{normalised}:{media_type}:{hashlib.sha256(content).hexdigest()}")
         resource_dir = posixpath.dirname(normalised)
         if media_type == "text/css":
@@ -445,25 +487,64 @@ def _resource_fingerprint(
             for nested_reference in sorted(set(_resource_references(content))):
                 append_reference(nested_reference, resource_dir)
 
-    for resource_href, resource in sorted(resources_by_href.items()):
-        if str(getattr(resource, "media_type", "")) == "text/css":
-            append_reference(resource_href, "")
-
-    for raw_reference in sorted(set(_resource_references(item.get_content()))):
+    for raw_reference in sorted(set(_resource_references(raw_content))):
         append_reference(raw_reference, chapter_dir)
     return hashlib.sha256("\n".join(sorted(set(parts))).encode("utf-8")).hexdigest()
+
+
+def _spine_itemref_fingerprints(path: Path) -> dict[str, str]:
+    fingerprints: dict[str, str] = {}
+    container_ns = {"container": "urn:oasis:names:tc:opendocument:xmlns:container"}
+    opf_ns = {"opf": "http://www.idpf.org/2007/opf"}
+    try:
+        with zipfile.ZipFile(path) as archive:
+            container = ElementTree.fromstring(archive.read("META-INF/container.xml"))
+            rootfile = container.find(".//container:rootfile", container_ns)
+            if rootfile is None:
+                return fingerprints
+            opf_path = _string_value(rootfile.attrib.get("full-path"))
+            if not opf_path:
+                return fingerprints
+            opf_root = ElementTree.fromstring(archive.read(opf_path))
+    except (KeyError, ElementTree.ParseError, zipfile.BadZipFile):
+        return fingerprints
+
+    for itemref in opf_root.findall(".//opf:spine/opf:itemref", opf_ns):
+        item_id = _string_value(itemref.attrib.get("idref"))
+        if not item_id:
+            continue
+        attrs = [
+            f'{key.lower()}="{_normalise_structure_attr(key.lower(), value)}"'
+            for key, value in itemref.attrib.items()
+            if key.lower() != "idref" and value
+        ]
+        fingerprints[item_id] = " ".join(sorted(attrs))
+    return fingerprints
 
 
 def _chapter_info(
     index: int,
     item: epub.EpubItem,
     item_id: str,
+    raw_content: bytes,
     resources_by_href: dict[str, epub.EpubItem],
+    resource_content_by_href: dict[str, bytes],
     spine_hrefs: set[str],
+    spine_itemref_fingerprint: str = "",
 ) -> ChapterInfo:
     href = str(getattr(item, "file_name", ""))
-    fingerprint, text_chars, structure_fingerprint = _fingerprint(item.get_content())
-    resource_fingerprint = _resource_fingerprint(item, resources_by_href, spine_hrefs)
+    fingerprint, text_chars, structure_fingerprint = _fingerprint(raw_content)
+    if spine_itemref_fingerprint:
+        structure_fingerprint = hashlib.sha256(
+            f"{structure_fingerprint}\nspine:{spine_itemref_fingerprint}".encode("utf-8")
+        ).hexdigest()
+    resource_fingerprint = _resource_fingerprint(
+        item,
+        raw_content,
+        resources_by_href,
+        resource_content_by_href,
+        spine_hrefs,
+    )
     title = _string_value(getattr(item, "title", "")) or href
     return ChapterInfo(
         index,
@@ -507,6 +588,8 @@ def _spine_ordered_document_items(book: epub.EpubBook) -> list[tuple[epub.EpubIt
 
 def inspect_epub(path: Path) -> EpubInspection:
     book = epub.read_epub(str(path))
+    opf_path, raw_entries = _epub_raw_entries(path)
+    resource_content_by_href = _resource_contents_by_href(opf_path, raw_entries)
     report = EpubInspection(
         path=path,
         title=_metadata_first(book, "DC", "title", path.stem),
@@ -520,13 +603,23 @@ def inspect_epub(path: Path) -> EpubInspection:
         if str(getattr(item, "file_name", ""))
     }
     ordered_items = _spine_ordered_document_items(book)
+    spine_itemrefs = _spine_itemref_fingerprints(path)
     spine_hrefs = {
         _normalise_epub_href(str(getattr(item, "file_name", "")))
         for item, _ in ordered_items
     }
     for chapter_index, (item, item_id) in enumerate(ordered_items, start=1):
         report.chapters.append(
-            _chapter_info(chapter_index, item, item_id, resources_by_href, spine_hrefs)
+            _chapter_info(
+                chapter_index,
+                item,
+                item_id,
+                _raw_item_content(item, resource_content_by_href),
+                resources_by_href,
+                resource_content_by_href,
+                spine_hrefs,
+                spine_itemrefs.get(item_id, ""),
+            )
         )
 
     cover_item_ids = _cover_item_ids(book)

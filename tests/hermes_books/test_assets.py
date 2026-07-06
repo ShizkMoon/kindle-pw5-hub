@@ -1,8 +1,9 @@
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
-from scripts.hermes_books.assets import AssetCandidate, AssetEnricher
+from scripts.hermes_books.assets import AssetCandidate, AssetEnricher, apply_auto_adopted_assets
 from scripts.hermes_books.config import AssetEnrichmentConfig
 from scripts.hermes_books.inspect import inspect_epub
 from scripts.hermes_books.models import AssetMode
@@ -90,6 +91,51 @@ class AssetTests(unittest.TestCase):
 
             self.assertEqual([candidate.role for candidate in asset_report.auto_adopted], ["cover"])
             self.assertIn("illustration", [candidate.role for candidate in asset_report.pending])
+
+    def test_auto_cover_uses_unique_path_when_default_path_is_non_cover_image(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            epub_path = make_epub(root / "book.epub")
+            with zipfile.ZipFile(epub_path, "r") as source:
+                entries = {name: source.read(name) for name in source.namelist()}
+            opf = entries["EPUB/content.opf"].decode("utf-8")
+            opf = opf.replace(
+                "</manifest>",
+                '    <item href="images/hermes-cover.jpg" id="inline_image" media-type="image/jpeg" />\n  </manifest>',
+            )
+            entries["EPUB/content.opf"] = opf.encode("utf-8")
+            entries["EPUB/images/hermes-cover.jpg"] = b"original non-cover image"
+            with zipfile.ZipFile(epub_path, "w") as target:
+                for name, content in entries.items():
+                    target.writestr(name, content)
+
+            cover_path = root / "cover.jpg"
+            cover_path.write_bytes(b"new cover image")
+            candidate = AssetCandidate(
+                role="cover",
+                source_url="https://assets.example/cover.jpg",
+                local_path=cover_path,
+                width=1600,
+                height=2400,
+                confidence=0.95,
+                reason="test cover",
+            )
+            report = inspect_epub(epub_path)
+            report_asset = AssetEnricher(AssetEnrichmentConfig(mode=AssetMode.BALANCED), FakeProvider()).plan(
+                "Book",
+                "Author",
+                report,
+                root,
+            )
+            report_asset.auto_adopted = [candidate]
+
+            changed = apply_auto_adopted_assets(epub_path, report_asset, root)
+
+            self.assertTrue(changed)
+            with zipfile.ZipFile(epub_path) as archive:
+                self.assertEqual(archive.read("EPUB/images/hermes-cover.jpg"), b"original non-cover image")
+                self.assertEqual(archive.read("EPUB/images/hermes-cover-2.jpg"), b"new cover image")
+            self.assertFalse(inspect_epub(epub_path).missing_cover)
 
 
 if __name__ == "__main__":

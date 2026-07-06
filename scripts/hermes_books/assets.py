@@ -270,6 +270,54 @@ def _ensure_cover_manifest(opf: ElementTree.Element, file_name: str) -> None:
         cover_item.set("properties", " ".join(sorted(properties)))
 
 
+def _archive_path_for_opf_href(opf_path: str, href: str) -> str:
+    return posixpath.normpath(posixpath.join(posixpath.dirname(opf_path), href))
+
+
+def _existing_cover_archive_paths(opf: ElementTree.Element, opf_path: str) -> set[str]:
+    namespace = opf.tag[1:].split("}", 1)[0] if opf.tag.startswith("{") else ""
+    q = lambda name: _opf_tag(namespace, name)
+    cover_ids = {"hermes-cover-image"}
+    metadata = opf.find(q("metadata"))
+    if metadata is not None:
+        for meta in metadata.findall(q("meta")):
+            if meta.attrib.get("name", "").lower() == "cover":
+                cover_id = meta.attrib.get("content", "").strip()
+                if cover_id:
+                    cover_ids.add(cover_id)
+
+    paths: set[str] = set()
+    manifest = opf.find(q("manifest"))
+    if manifest is None:
+        return paths
+    for item in manifest.findall(q("item")):
+        item_id = item.attrib.get("id", "")
+        properties = {token.lower() for token in item.attrib.get("properties", "").split()}
+        href = item.attrib.get("href", "")
+        if href and (item_id in cover_ids or "cover-image" in properties):
+            paths.add(_archive_path_for_opf_href(opf_path, href))
+    return paths
+
+
+def _unique_cover_file_name(
+    opf: ElementTree.Element,
+    opf_path: str,
+    entries: dict[str, bytes],
+    file_name: str,
+) -> str:
+    image_path = _archive_path_for_opf_href(opf_path, file_name)
+    if image_path not in entries or image_path in _existing_cover_archive_paths(opf, opf_path):
+        return file_name
+
+    stem, suffix = posixpath.splitext(file_name)
+    counter = 2
+    while True:
+        candidate = f"{stem}-{counter}{suffix}"
+        if _archive_path_for_opf_href(opf_path, candidate) not in entries:
+            return candidate
+        counter += 1
+
+
 def _insert_cover(epub_path: Path, file_name: str, data: bytes) -> None:
     temp_path = epub_path.with_name(f"{epub_path.stem}.assets.tmp{epub_path.suffix}")
     with zipfile.ZipFile(epub_path, "r") as source:
@@ -278,10 +326,11 @@ def _insert_cover(epub_path: Path, file_name: str, data: bytes) -> None:
 
     opf_path = _opf_root_path(entries)
     opf = ElementTree.fromstring(entries[opf_path])
+    file_name = _unique_cover_file_name(opf, opf_path, entries, file_name)
     _ensure_cover_manifest(opf, file_name)
     entries[opf_path] = ElementTree.tostring(opf, encoding="utf-8", xml_declaration=True)
 
-    image_path = posixpath.normpath(posixpath.join(posixpath.dirname(opf_path), file_name))
+    image_path = _archive_path_for_opf_href(opf_path, file_name)
     entries[image_path] = data
     existing_names = {info.filename for info in infos}
 
