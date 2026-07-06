@@ -204,6 +204,7 @@ def _run_metadata_enrichment(
         try:
             cover_bytes = metadata_cover_fetcher(report) if metadata_cover_fetcher is not None else None
             metadata_output = output_epub.with_name(f"{output_epub.stem}.metadata.epub")
+            before_inspection = inspection
             output_epub = apply_metadata_to_epub(
                 output_epub,
                 metadata_output,
@@ -211,11 +212,52 @@ def _run_metadata_enrichment(
                 cover_bytes=cover_bytes,
             )
             inspection = inspect_epub(output_epub)
+            structure_stable = _reader_structure_stable(before_inspection, inspection)
+            report.koreader_guard["reader_structure_stable"] = structure_stable
+            if not structure_stable:
+                report.koreader_guard["live_publish_allowed"] = False
         except Exception as exc:
             report = enricher.skipped(f"metadata apply failed: {exc}")
 
     write_metadata_reports(report, reports_dir)
     return output_epub, inspection, report.to_dict()
+
+
+def _reader_structure_stable(before: Any, after: Any) -> bool:
+    before_chapters = getattr(before, "chapters", [])
+    after_chapters = getattr(after, "chapters", [])
+    if len(before_chapters) != len(after_chapters):
+        return False
+    for old, new in zip(before_chapters, after_chapters):
+        if old.href != new.href or old.item_id != new.item_id:
+            return False
+        if old.fingerprint != new.fingerprint:
+            return False
+        if old.structure_fingerprint != new.structure_fingerprint:
+            return False
+        if old.resource_fingerprint != new.resource_fingerprint:
+            return False
+    return True
+
+
+def _metadata_publish_guard_reason(
+    config: HermesConfig,
+    metadata_report: dict[str, Any],
+    *,
+    target_exists: bool,
+) -> str | None:
+    if metadata_report.get("status") != "applied":
+        return None
+    if not target_exists:
+        return None
+    if config.koreader.metadata_location.value == "hashdocsettings":
+        return "KOReader hashdocsettings cannot preserve progress after EPUB content hash changes"
+    guard = metadata_report.get("koreader_guard", {})
+    if guard.get("stable_target_path") is False or guard.get("stable_canonical_id") is False:
+        return "aggressive metadata changed path-sensitive identity"
+    if guard.get("reader_structure_stable") is False:
+        return "metadata rewrite changed reader-facing EPUB structure"
+    return None
 
 
 def _write_update_diff_report(
@@ -439,6 +481,7 @@ def run_intake(
 
     expected_old_epub_hash: str | None = None
     expected_old_manifest_hash: str | None = None
+    metadata_guard_reason: str | None = None
     candidate_manifest = _manifest_from_inspection(
         job,
         snapshot.source_hash,
@@ -507,6 +550,19 @@ def run_intake(
                     diff.new_chapter_count,
                 )
 
+    metadata_guard_reason = _metadata_publish_guard_reason(
+        config,
+        metadata_report_data,
+        target_exists=target_exists,
+    )
+    if metadata_guard_reason is not None:
+        decision = UpdateDecision.BLOCKED_RISKY
+        _write_update_diff_report(
+            paths.reports_dir / "update-diff.md",
+            decision,
+            [metadata_guard_reason],
+        )
+
     manifest = _manifest_from_inspection(job, snapshot.source_hash, output_epub, inspection, decision)
     manifest.metadata_report = metadata_report_data
     manifest.asset_report = asset_report_data
@@ -526,6 +582,8 @@ def run_intake(
             "path": job.webdav_target_path,
             "reason": f"publish failed: {exc}",
         }
+    if metadata_guard_reason and "reason" not in publish_report:
+        publish_report["reason"] = metadata_guard_reason
     (paths.reports_dir / "publish-report.json").write_text(
         json.dumps(publish_report, ensure_ascii=False, indent=2),
         encoding="utf-8",

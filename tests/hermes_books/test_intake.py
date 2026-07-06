@@ -7,7 +7,13 @@ import zipfile
 from pathlib import Path
 
 from scripts.hermes_books.assets import AssetCandidate
-from scripts.hermes_books.config import AssetEnrichmentConfig, HermesConfig, PipelineConfig
+from scripts.hermes_books.config import (
+    AssetEnrichmentConfig,
+    HermesConfig,
+    KOReaderConfig,
+    KOReaderMetadataLocation,
+    PipelineConfig,
+)
 from scripts.hermes_books.inspect import inspect_epub
 from scripts.hermes_books.intake import EpubValidationResult, run_intake
 from scripts.hermes_books.metadata import MetadataDecision, MetadataEvidence, MetadataResolution
@@ -28,6 +34,28 @@ def required_epubcheck_config() -> HermesConfig:
         asset_enrichment=AssetEnrichmentConfig(mode=AssetMode.OFF),
         pipeline=PipelineConfig(require_epubcheck=True),
     )
+
+
+class StaticMetadataProvider:
+    def search(self, _clues):
+        return [
+            MetadataEvidence(
+                "store-1",
+                "store",
+                "https://example.test/books/1",
+                {"title": "标准书名", "illustrators": ["画师"]},
+            )
+        ]
+
+
+class StaticMetadataReasoner:
+    def resolve(self, _clues, _evidence):
+        return MetadataResolution(
+            decisions=[
+                MetadataDecision("title", "Book", "标准书名", "apply", 0.96, ["store-1"], "title match"),
+                MetadataDecision("illustrators", [], ["画师"], "apply", 0.96, ["store-1"], "illustrator match"),
+            ]
+        )
 
 
 def pending_candidate_path(webdav_root: Path, report: dict[str, str]) -> Path:
@@ -79,17 +107,6 @@ class IntakeTests(unittest.TestCase):
             root = Path(td)
             source_epub = make_epub(root / "source.epub", title="Old Title")
 
-            class StaticProvider:
-                def search(self, _clues):
-                    return [
-                        MetadataEvidence(
-                            "store-1",
-                            "store",
-                            "https://example.test/books/1",
-                            {"title": "标准书名", "illustrators": ["画师"]},
-                        )
-                    ]
-
             class StaticReasoner:
                 def resolve(self, _clues, _evidence):
                     return MetadataResolution(
@@ -107,7 +124,7 @@ class IntakeTests(unittest.TestCase):
                 runs_root=root / "runs",
                 config=no_network_config(),
                 webdav_client=LocalWebDavClient(root / "webdav"),
-                metadata_provider=StaticProvider(),
+                metadata_provider=StaticMetadataProvider(),
                 metadata_reasoner=StaticReasoner(),
             )
 
@@ -122,6 +139,78 @@ class IntakeTests(unittest.TestCase):
             self.assertIn("标准书名", opf_text)
             self.assertIn("画师", opf_text)
             self.assertIn("9780000000000", opf_text)
+
+    def test_existing_book_aggressive_metadata_book_folder_allows_safe_metadata_publish(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav_root = root / "webdav"
+            client = LocalWebDavClient(webdav_root, allow_existing_overwrite=True)
+            old_epub = make_epub(root / "old.epub", title="Book")
+            new_epub = make_epub(root / "new.epub", title="Book")
+
+            run_intake(
+                input_path=old_epub,
+                title="Book",
+                author="Author",
+                runs_root=root / "old-runs",
+                config=no_network_config(),
+                webdav_client=client,
+            )
+            result = run_intake(
+                input_path=new_epub,
+                title="Book",
+                author="Author",
+                runs_root=root / "new-runs",
+                config=no_network_config(),
+                webdav_client=client,
+                metadata_provider=StaticMetadataProvider(),
+                metadata_reasoner=StaticMetadataReasoner(),
+            )
+
+            self.assertEqual(result.publish_report["status"], "published")
+            self.assertEqual(result.manifest.update_decision, UpdateDecision.SAFE_METADATA)
+            with zipfile.ZipFile(webdav_root / "books/Book - Author.epub") as archive:
+                opf_text = archive.read("EPUB/content.opf").decode("utf-8")
+            self.assertIn("标准书名", opf_text)
+
+    def test_existing_book_aggressive_metadata_hashdocsettings_goes_pending(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav_root = root / "webdav"
+            old_epub = make_epub(root / "old.epub", title="Book")
+            new_epub = make_epub(root / "new.epub", title="Book")
+            config = HermesConfig(
+                asset_enrichment=AssetEnrichmentConfig(mode=AssetMode.OFF),
+                pipeline=PipelineConfig(require_epubcheck=False),
+                koreader=KOReaderConfig(metadata_location=KOReaderMetadataLocation.HASHDOCSETTINGS),
+            )
+
+            run_intake(
+                input_path=old_epub,
+                title="Book",
+                author="Author",
+                runs_root=root / "old-runs",
+                config=config,
+                webdav_client=LocalWebDavClient(webdav_root, allow_existing_overwrite=True),
+            )
+            remote_epub = webdav_root / "books/Book - Author.epub"
+            old_remote_bytes = remote_epub.read_bytes()
+
+            result = run_intake(
+                input_path=new_epub,
+                title="Book",
+                author="Author",
+                runs_root=root / "new-runs",
+                config=config,
+                webdav_client=LocalWebDavClient(webdav_root, allow_existing_overwrite=True),
+                metadata_provider=StaticMetadataProvider(),
+                metadata_reasoner=StaticMetadataReasoner(),
+            )
+
+            self.assertEqual(result.publish_report["status"], "pending")
+            self.assertEqual(result.manifest.update_decision, UpdateDecision.BLOCKED_RISKY)
+            self.assertIn("hashdocsettings", result.publish_report["reason"])
+            self.assertEqual(remote_epub.read_bytes(), old_remote_bytes)
 
     def test_unreadable_source_epub_writes_local_failure_reports_without_publishing(self):
         with tempfile.TemporaryDirectory() as td:
