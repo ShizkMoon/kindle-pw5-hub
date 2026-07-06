@@ -4,7 +4,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.hermes_books.config import HermesConfig
+from scripts.hermes_books.config import (
+    HermesConfig,
+    KOReaderMetadataLocation,
+    MetadataEnrichmentMode,
+)
 from scripts.hermes_books.models import (
     AssetMode,
     BookJob,
@@ -66,6 +70,28 @@ class ModelsConfigTests(unittest.TestCase):
         self.assertEqual(cfg.webdav.books_path, "/books")
         self.assertEqual(cfg.asset_enrichment.mode, AssetMode.AGGRESSIVE)
         self.assertEqual(cfg.update_policy.chapter_fingerprint_threshold, 0.98)
+
+    def test_loads_metadata_and_koreader_config(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg_path = Path(td) / "hermes-books.yaml"
+            cfg_path.write_text(
+                "metadata_enrichment:\n"
+                "  mode: \"aggressive\"\n"
+                "  auto_apply_min_confidence: 0.91\n"
+                "  require_evidence_url: false\n"
+                "  write_cover: false\n"
+                "koreader:\n"
+                "  metadata_location: \"hashdocsettings\"\n",
+                encoding="utf-8",
+            )
+
+            cfg = HermesConfig.load(cfg_path)
+
+        self.assertEqual(cfg.metadata_enrichment.mode, MetadataEnrichmentMode.AGGRESSIVE)
+        self.assertEqual(cfg.metadata_enrichment.auto_apply_min_confidence, 0.91)
+        self.assertFalse(cfg.metadata_enrichment.require_evidence_url)
+        self.assertFalse(cfg.metadata_enrichment.write_cover)
+        self.assertEqual(cfg.koreader.metadata_location, KOReaderMetadataLocation.HASHDOCSETTINGS)
 
 
 if __name__ == "__main__":

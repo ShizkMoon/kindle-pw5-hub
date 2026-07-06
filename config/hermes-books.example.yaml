@@ -22,3 +22,21 @@ asset_enrichment:
   auto_insert_illustration_min_confidence: 0.92
   require_source_url: true
   preserve_original_images: true
+
+metadata_enrichment:
+  mode: "aggressive"
+  auto_apply_min_confidence: 0.86
+  require_evidence_url: true
+  allow_single_source_fields: true
+  block_on_conflicting_identity: true
+  preserve_target_path: true
+  preserve_canonical_id: true
+  write_epub_metadata: true
+  write_cover: true
+  write_description: true
+  write_subjects: true
+
+koreader:
+  metadata_location: "book_folder"
+  aggressive_metadata_requires_stable_path: true
+  hashdocsettings_policy: "block"

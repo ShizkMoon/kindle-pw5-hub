@@ -1,10 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
 from .models import AssetMode
+
+
+class MetadataEnrichmentMode(str, Enum):
+    OFF = "off"
+    REPORT_ONLY = "report-only"
+    AGGRESSIVE = "aggressive"
+
+
+class KOReaderMetadataLocation(str, Enum):
+    BOOK_FOLDER = "book_folder"
+    DOCSETTINGS = "docsettings"
+    HASHDOCSETTINGS = "hashdocsettings"
 
 
 @dataclass(frozen=True)
@@ -41,11 +54,35 @@ class AssetEnrichmentConfig:
 
 
 @dataclass(frozen=True)
+class MetadataEnrichmentConfig:
+    mode: MetadataEnrichmentMode = MetadataEnrichmentMode.AGGRESSIVE
+    auto_apply_min_confidence: float = 0.86
+    require_evidence_url: bool = True
+    allow_single_source_fields: bool = True
+    block_on_conflicting_identity: bool = True
+    preserve_target_path: bool = True
+    preserve_canonical_id: bool = True
+    write_epub_metadata: bool = True
+    write_cover: bool = True
+    write_description: bool = True
+    write_subjects: bool = True
+
+
+@dataclass(frozen=True)
+class KOReaderConfig:
+    metadata_location: KOReaderMetadataLocation = KOReaderMetadataLocation.BOOK_FOLDER
+    aggressive_metadata_requires_stable_path: bool = True
+    hashdocsettings_policy: str = "block"
+
+
+@dataclass(frozen=True)
 class HermesConfig:
     webdav: WebDavConfig = WebDavConfig()
     pipeline: PipelineConfig = PipelineConfig()
     update_policy: UpdatePolicyConfig = UpdatePolicyConfig()
     asset_enrichment: AssetEnrichmentConfig = AssetEnrichmentConfig()
+    metadata_enrichment: MetadataEnrichmentConfig = MetadataEnrichmentConfig()
+    koreader: KOReaderConfig = KOReaderConfig()
 
     @classmethod
     def load(cls, path: Path | None) -> "HermesConfig":
@@ -63,7 +100,19 @@ class HermesConfig:
         }
         asset_data["mode"] = AssetMode(asset_data["mode"])
         asset_enrichment = AssetEnrichmentConfig(**asset_data)
-        return cls(webdav, pipeline, update_policy, asset_enrichment)
+        metadata_data: dict[str, Any] = {
+            **MetadataEnrichmentConfig().__dict__,
+            **data.get("metadata_enrichment", {}),
+        }
+        metadata_data["mode"] = MetadataEnrichmentMode(metadata_data["mode"])
+        metadata_enrichment = MetadataEnrichmentConfig(**metadata_data)
+        koreader_data: dict[str, Any] = {
+            **KOReaderConfig().__dict__,
+            **data.get("koreader", {}),
+        }
+        koreader_data["metadata_location"] = KOReaderMetadataLocation(koreader_data["metadata_location"])
+        koreader = KOReaderConfig(**koreader_data)
+        return cls(webdav, pipeline, update_policy, asset_enrichment, metadata_enrichment, koreader)
 
 
 def _parse_scalar(value: str) -> Any:
