@@ -16,7 +16,15 @@ from .build import build_draft_from_txt, normalize_existing_epub
 from .config import HermesConfig
 from .diff import compare_for_update
 from .inspect import inspect_epub, write_quality_report
+from .metadata import (
+    MetadataClues,
+    MetadataEnricher,
+    MetadataProvider,
+    MetadataReasoner,
+    write_metadata_reports,
+)
 from .models import BookJob, BookManifest, UpdateDecision, canonical_id_for, sha256_file
+from .opf_metadata import apply_metadata_to_epub
 from .publish import HttpWebDavClient, WebDavClient, WebDavPublisher
 from .sources import LocalFileSource, prepare_run_workspace
 
@@ -143,6 +151,73 @@ def _manifest_path(target_epub_path: str) -> str:
     return target_epub_path[:-5] + ".hermes.json"
 
 
+def _metadata_clues(job: BookJob, inspection: Any) -> MetadataClues:
+    return MetadataClues(
+        title=job.title,
+        author=job.author,
+        opf_identifier=getattr(inspection, "opf_identifier", ""),
+        existing_metadata={
+            "inspection_title": getattr(inspection, "title", ""),
+            "inspection_author": getattr(inspection, "author", ""),
+            "chapter_titles": [chapter.title for chapter in getattr(inspection, "chapters", [])[:20]],
+            "missing_cover": getattr(inspection, "missing_cover", True),
+        },
+    )
+
+
+def _run_metadata_enrichment(
+    job: BookJob,
+    output_epub: Path,
+    inspection: Any,
+    config: HermesConfig,
+    reports_dir: Path,
+    metadata_provider: MetadataProvider | None,
+    metadata_reasoner: MetadataReasoner | None,
+    metadata_cover_fetcher: Callable[[Any], bytes | None] | None,
+) -> tuple[Path, Any, dict[str, Any]]:
+    enricher = MetadataEnricher(config.metadata_enrichment)
+    if metadata_provider is None or metadata_reasoner is None:
+        report = enricher.skipped("metadata provider or reasoner not configured")
+        write_metadata_reports(report, reports_dir)
+        return output_epub, inspection, report.to_dict()
+
+    clues = _metadata_clues(job, inspection)
+    try:
+        evidence = metadata_provider.search(clues)
+        resolution = metadata_reasoner.resolve(clues, evidence)
+        report = enricher.decide(
+            evidence,
+            resolution,
+            koreader_guard={
+                "metadata_location": config.koreader.metadata_location.value,
+                "stable_target_path": True,
+                "stable_canonical_id": True,
+                "live_publish_allowed": config.koreader.metadata_location.value != "hashdocsettings",
+            },
+        )
+    except Exception as exc:
+        report = enricher.skipped(f"metadata enrichment failed: {exc}")
+        write_metadata_reports(report, reports_dir)
+        return output_epub, inspection, report.to_dict()
+
+    if report.applied_decisions and config.metadata_enrichment.write_epub_metadata:
+        try:
+            cover_bytes = metadata_cover_fetcher(report) if metadata_cover_fetcher is not None else None
+            metadata_output = output_epub.with_name(f"{output_epub.stem}.metadata.epub")
+            output_epub = apply_metadata_to_epub(
+                output_epub,
+                metadata_output,
+                report,
+                cover_bytes=cover_bytes,
+            )
+            inspection = inspect_epub(output_epub)
+        except Exception as exc:
+            report = enricher.skipped(f"metadata apply failed: {exc}")
+
+    write_metadata_reports(report, reports_dir)
+    return output_epub, inspection, report.to_dict()
+
+
 def _write_update_diff_report(
     path: Path,
     decision: UpdateDecision,
@@ -241,6 +316,9 @@ def run_intake(
     epub_validator: Callable[[Path], EpubValidationResult] | None = None,
     asset_provider: AssetProvider | None = None,
     asset_fetcher: AssetFetcher | None = None,
+    metadata_provider: MetadataProvider | None = None,
+    metadata_reasoner: MetadataReasoner | None = None,
+    metadata_cover_fetcher: Callable[[Any], bytes | None] | None = None,
 ) -> IntakeResult:
     config = config or HermesConfig.load(None)
     books_path = _valid_books_path(config.webdav.books_path)
@@ -275,6 +353,17 @@ def run_intake(
             exc,
         )
 
+    output_epub, inspection, metadata_report_data = _run_metadata_enrichment(
+        job,
+        output_epub,
+        inspection,
+        config,
+        paths.reports_dir,
+        metadata_provider,
+        metadata_reasoner,
+        metadata_cover_fetcher,
+    )
+
     asset_cache_dir = job.run_dir / "assets-cache"
     asset_report = AssetEnricher(config.asset_enrichment, asset_provider).plan(
         title,
@@ -298,6 +387,7 @@ def run_intake(
     if config.pipeline.require_epubcheck and validation.status != "passed":
         decision = UpdateDecision.BLOCKED_RISKY
         manifest = _manifest_from_inspection(job, snapshot.source_hash, output_epub, inspection, decision)
+        manifest.metadata_report = metadata_report_data
         manifest.asset_report = asset_report_data
         (paths.reports_dir / "manifest.json").write_text(manifest.to_json(), encoding="utf-8")
         reason = f"EPUBCheck validation status {validation.status}"
@@ -333,6 +423,7 @@ def run_intake(
             ["remote target state unavailable"],
         )
         manifest = _manifest_from_inspection(job, snapshot.source_hash, output_epub, inspection, decision)
+        manifest.metadata_report = metadata_report_data
         manifest.asset_report = asset_report_data
         (paths.reports_dir / "manifest.json").write_text(manifest.to_json(), encoding="utf-8")
         publish_report = {
@@ -355,6 +446,7 @@ def run_intake(
         inspection,
         UpdateDecision.NEW_BOOK,
     )
+    candidate_manifest.metadata_report = metadata_report_data
     if target_exists and not manifest_exists:
         decision = UpdateDecision.BLOCKED_RISKY
         _write_update_diff_report(
@@ -416,6 +508,7 @@ def run_intake(
                 )
 
     manifest = _manifest_from_inspection(job, snapshot.source_hash, output_epub, inspection, decision)
+    manifest.metadata_report = metadata_report_data
     manifest.asset_report = asset_report_data
     (paths.reports_dir / "manifest.json").write_text(manifest.to_json(), encoding="utf-8")
 

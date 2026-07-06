@@ -133,6 +133,7 @@ class BookManifest:
     image_inventory: list[dict[str, Any]] = field(default_factory=list)
     quality_report: dict[str, Any] = field(default_factory=dict)
     asset_report: dict[str, Any] = field(default_factory=dict)
+    metadata_report: dict[str, Any] = field(default_factory=dict)
     previous_versions: list[dict[str, Any]] = field(default_factory=list)
 
     def to_json(self) -> str:

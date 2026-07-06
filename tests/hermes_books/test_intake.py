@@ -3,12 +3,14 @@ import unittest
 import json
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 from scripts.hermes_books.assets import AssetCandidate
 from scripts.hermes_books.config import AssetEnrichmentConfig, HermesConfig, PipelineConfig
 from scripts.hermes_books.inspect import inspect_epub
 from scripts.hermes_books.intake import EpubValidationResult, run_intake
+from scripts.hermes_books.metadata import MetadataDecision, MetadataEvidence, MetadataResolution
 from scripts.hermes_books.models import AssetMode, UpdateDecision
 from scripts.hermes_books.publish import LocalWebDavClient
 from tests.hermes_books.helpers import make_epub
@@ -71,6 +73,55 @@ class IntakeTests(unittest.TestCase):
 
             self.assertEqual(result.publish_report["status"], "published")
             self.assertTrue((root / "webdav/books/Book - Author.epub").exists())
+
+    def test_aggressive_metadata_enrichment_writes_reports_manifest_and_epub(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source_epub = make_epub(root / "source.epub", title="Old Title")
+
+            class StaticProvider:
+                def search(self, _clues):
+                    return [
+                        MetadataEvidence(
+                            "store-1",
+                            "store",
+                            "https://example.test/books/1",
+                            {"title": "标准书名", "illustrators": ["画师"]},
+                        )
+                    ]
+
+            class StaticReasoner:
+                def resolve(self, _clues, _evidence):
+                    return MetadataResolution(
+                        decisions=[
+                            MetadataDecision("title", "Old Title", "标准书名", "apply", 0.96, ["store-1"], "title match"),
+                            MetadataDecision("illustrators", [], ["画师"], "apply", 0.96, ["store-1"], "illustrator match"),
+                            MetadataDecision("isbn", "", "9780000000000", "apply", 0.96, ["store-1"], "isbn match"),
+                        ]
+                    )
+
+            result = run_intake(
+                input_path=source_epub,
+                title="Book",
+                author="Author",
+                runs_root=root / "runs",
+                config=no_network_config(),
+                webdav_client=LocalWebDavClient(root / "webdav"),
+                metadata_provider=StaticProvider(),
+                metadata_reasoner=StaticReasoner(),
+            )
+
+            self.assertEqual(result.publish_report["status"], "published")
+            metadata_json = json.loads((result.reports_dir / "metadata-report.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata_json["status"], "applied")
+            self.assertEqual(result.manifest.metadata_report["status"], "applied")
+            self.assertTrue((result.reports_dir / "metadata-report.md").exists())
+            published = root / "webdav/books/Book - Author.epub"
+            with zipfile.ZipFile(published) as archive:
+                opf_text = archive.read("EPUB/content.opf").decode("utf-8")
+            self.assertIn("标准书名", opf_text)
+            self.assertIn("画师", opf_text)
+            self.assertIn("9780000000000", opf_text)
 
     def test_unreadable_source_epub_writes_local_failure_reports_without_publishing(self):
         with tempfile.TemporaryDirectory() as td:
