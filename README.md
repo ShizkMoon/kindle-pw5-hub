@@ -100,6 +100,12 @@ python -m scripts.hermes_books.intake "D:\Books\raw.epub" -t "书名" -a "作者
 
 管线会在 `runs/<job-id>/` 下保留 raw、draft、normalized 和 reports。发布到 WebDAV 前会执行 append-safe 检查：旧章节稳定且只追加新章时覆盖 `/books/书名 - 作者.epub`，风险更新进入 `/books/.pending/`。
 
+### 激进元数据增强
+
+Hermes intake 支持 provider/reasoner 驱动的激进元数据增强：搜索层提供带 URL 的证据，大模型/规则 reasoner 产出结构化字段决策，管线再自动写入 EPUB OPF metadata、系列/卷号/插画师等扩展字段和封面。每个字段都会进入 `runs/<job-id>/reports/metadata-report.json` 与 `metadata-report.md`，记录旧值、新值、证据、置信度和是否应用。
+
+为了保护 KOReader 进度、书签和标注关联，增强阶段不会自动改变 WebDAV 文件名、目标路径、`canonical_id` 或 OPF 主 identifier。`book_folder` 和 `docsettings` 模式下，只有章节正文、章节结构、spine、资源指纹保持稳定时才允许 live overwrite；`hashdocsettings` 模式第一版默认阻断 live overwrite，改写后的 EPUB 会进入 `.pending/`，避免内容 hash 改变后 KOReader 无法关联旧阅读状态。
+
 ## 快速开始
 
 ### 我的日常使用流程
