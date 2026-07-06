@@ -32,6 +32,10 @@ def sha256_bytes(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def pending_candidate_path(webdav_root, report):
+    return webdav_root / report["path"].strip("/") / "candidate.epub"
+
+
 class PublishTests(unittest.TestCase):
     def test_local_webdav_client_rejects_escape_paths(self):
         with tempfile.TemporaryDirectory() as td:
@@ -75,7 +79,7 @@ class PublishTests(unittest.TestCase):
             self.assertEqual(report["status"], "pending")
             self.assertIn("new manifest write failed", report["reason"])
             self.assertFalse((webdav / "books/Book - Author.epub").exists())
-            self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
+            self.assertTrue(pending_candidate_path(webdav, report).exists())
 
     def test_new_book_without_verified_publish_support_goes_pending_without_creating_live_epub(self):
         with tempfile.TemporaryDirectory() as td:
@@ -98,7 +102,7 @@ class PublishTests(unittest.TestCase):
             self.assertEqual(report["status"], "pending")
             self.assertIn("verified conditional WebDAV support", report["reason"])
             self.assertFalse((webdav / "books/Book - Author.epub").exists())
-            self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
+            self.assertTrue(pending_candidate_path(webdav, report).exists())
 
     def test_new_book_supported_non_local_client_publishes_manifest_before_epub(self):
         with tempfile.TemporaryDirectory() as td:
@@ -258,11 +262,11 @@ class PublishTests(unittest.TestCase):
             epub = root / "candidate.epub"
             epub.write_bytes(b"new")
 
-            publisher = WebDavPublisher(LocalWebDavClient(webdav))
+            publisher = WebDavPublisher(LocalWebDavClient(webdav, allow_existing_overwrite=True))
             report = publisher.publish("/books/Book - Author.epub", epub, manifest(UpdateDecision.BLOCKED_RISKY))
 
             self.assertEqual((webdav / "books/Book - Author.epub").read_bytes(), b"old")
-            self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
+            self.assertTrue(pending_candidate_path(webdav, report).exists())
             self.assertEqual(report["status"], "pending")
 
     def test_new_book_with_existing_target_goes_pending_without_touching_old_book(self):
@@ -274,11 +278,11 @@ class PublishTests(unittest.TestCase):
             epub = root / "candidate.epub"
             epub.write_bytes(b"new")
 
-            publisher = WebDavPublisher(LocalWebDavClient(webdav))
+            publisher = WebDavPublisher(LocalWebDavClient(webdav, allow_existing_overwrite=True))
             report = publisher.publish("/books/Book - Author.epub", epub, manifest(UpdateDecision.NEW_BOOK))
 
             self.assertEqual((webdav / "books/Book - Author.epub").read_bytes(), b"old")
-            self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
+            self.assertTrue(pending_candidate_path(webdav, report).exists())
             self.assertEqual(report["status"], "pending")
 
     def test_safe_append_existing_target_without_manifest_goes_pending_without_touching_old_book(self):
@@ -292,11 +296,11 @@ class PublishTests(unittest.TestCase):
             epub = root / "candidate.epub"
             epub.write_bytes(b"new")
 
-            publisher = WebDavPublisher(LocalWebDavClient(webdav))
+            publisher = WebDavPublisher(LocalWebDavClient(webdav, allow_existing_overwrite=True))
             report = publisher.publish("/books/Book - Author.epub", epub, manifest(UpdateDecision.SAFE_APPEND))
 
             self.assertEqual(remote_epub.read_bytes(), old_epub_bytes)
-            self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
+            self.assertTrue(pending_candidate_path(webdav, report).exists())
             self.assertEqual(report["status"], "pending")
 
     def test_safe_append_existing_target_with_unreadable_manifest_goes_pending_without_touching_old_book(self):
@@ -312,6 +316,8 @@ class PublishTests(unittest.TestCase):
             epub.write_bytes(b"new")
 
             class UnreadableManifestClient(LocalWebDavClient):
+                supports_existing_overwrite = True
+
                 def get(self, path):
                     if path == "/books/Book - Author.hermes.json":
                         raise RuntimeError("injected manifest read failure")
@@ -321,7 +327,7 @@ class PublishTests(unittest.TestCase):
             report = publisher.publish("/books/Book - Author.epub", epub, manifest(UpdateDecision.SAFE_APPEND))
 
             self.assertEqual(remote_epub.read_bytes(), old_epub_bytes)
-            self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
+            self.assertTrue(pending_candidate_path(webdav, report).exists())
             self.assertEqual(report["status"], "pending")
 
     def test_safe_append_existing_target_without_expected_hashes_goes_pending_without_touching_old_book(self):
@@ -338,12 +344,12 @@ class PublishTests(unittest.TestCase):
             epub = root / "candidate.epub"
             epub.write_bytes(b"new-epub")
 
-            publisher = WebDavPublisher(LocalWebDavClient(webdav))
+            publisher = WebDavPublisher(LocalWebDavClient(webdav, allow_existing_overwrite=True))
             report = publisher.publish("/books/Book - Author.epub", epub, manifest(UpdateDecision.SAFE_APPEND))
 
             self.assertEqual(remote_epub.read_bytes(), old_epub_bytes)
             self.assertEqual(remote_manifest.read_bytes(), old_manifest_bytes)
-            self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
+            self.assertTrue(pending_candidate_path(webdav, report).exists())
             self.assertEqual(report["status"], "pending")
 
     def test_safe_append_existing_target_with_expected_hash_mismatch_goes_pending_without_touching_old_book(self):
@@ -360,7 +366,7 @@ class PublishTests(unittest.TestCase):
             epub = root / "candidate.epub"
             epub.write_bytes(b"new-epub")
 
-            publisher = WebDavPublisher(LocalWebDavClient(webdav))
+            publisher = WebDavPublisher(LocalWebDavClient(webdav, allow_existing_overwrite=True))
             report = publisher.publish(
                 "/books/Book - Author.epub",
                 epub,
@@ -371,10 +377,37 @@ class PublishTests(unittest.TestCase):
 
             self.assertEqual(remote_epub.read_bytes(), old_epub_bytes)
             self.assertEqual(remote_manifest.read_bytes(), old_manifest_bytes)
-            self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
+            self.assertTrue(pending_candidate_path(webdav, report).exists())
             self.assertEqual(report["status"], "pending")
 
     def test_safe_append_existing_target_with_matching_expected_hashes_still_publishes(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = root / "webdav"
+            (webdav / "books").mkdir(parents=True)
+            remote_epub = webdav / "books/Book - Author.epub"
+            remote_manifest = webdav / "books/Book - Author.hermes.json"
+            old_epub_bytes = b"old-epub"
+            old_manifest_bytes = b'{"old":true}'
+            remote_epub.write_bytes(old_epub_bytes)
+            remote_manifest.write_bytes(old_manifest_bytes)
+            epub = root / "candidate.epub"
+            epub.write_bytes(b"new-epub")
+
+            publisher = WebDavPublisher(LocalWebDavClient(webdav, allow_existing_overwrite=True))
+            report = publisher.publish(
+                "/books/Book - Author.epub",
+                epub,
+                manifest(UpdateDecision.SAFE_APPEND),
+                expected_old_epub_hash=sha256_bytes(old_epub_bytes),
+                expected_old_manifest_hash=sha256_bytes(old_manifest_bytes),
+            )
+
+            self.assertEqual(remote_epub.read_bytes(), b"new-epub")
+            self.assertNotEqual(remote_manifest.read_bytes(), old_manifest_bytes)
+            self.assertEqual(report["status"], "published")
+
+    def test_local_client_safe_append_goes_pending_without_live_overwrite(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             webdav = root / "webdav"
@@ -397,9 +430,10 @@ class PublishTests(unittest.TestCase):
                 expected_old_manifest_hash=sha256_bytes(old_manifest_bytes),
             )
 
-            self.assertEqual(remote_epub.read_bytes(), b"new-epub")
-            self.assertNotEqual(remote_manifest.read_bytes(), old_manifest_bytes)
-            self.assertEqual(report["status"], "published")
+            self.assertEqual(report["status"], "pending")
+            self.assertIn("transactional WebDAV support", report["reason"])
+            self.assertEqual(remote_epub.read_bytes(), old_epub_bytes)
+            self.assertEqual(remote_manifest.read_bytes(), old_manifest_bytes)
 
     def test_safe_append_without_transactional_overwrite_support_goes_pending_without_touching_old_book(self):
         with tempfile.TemporaryDirectory() as td:
@@ -454,6 +488,8 @@ class PublishTests(unittest.TestCase):
             epub.write_bytes(b"new-epub")
 
             class RacingTargetPutClient(LocalWebDavClient):
+                supports_existing_overwrite = True
+
                 def __init__(self, client_root):
                     super().__init__(client_root)
                     self.mutated = False
@@ -486,7 +522,7 @@ class PublishTests(unittest.TestCase):
             self.assertEqual(report["status"], "pending")
             self.assertEqual(remote_epub.read_bytes(), concurrent_epub_bytes)
             self.assertEqual(remote_manifest.read_bytes(), concurrent_manifest_bytes)
-            self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
+            self.assertTrue(pending_candidate_path(webdav, report).exists())
 
     def test_safe_append_target_only_race_after_target_put_rolls_back_manifest(self):
         with tempfile.TemporaryDirectory() as td:
@@ -506,6 +542,8 @@ class PublishTests(unittest.TestCase):
             epub.write_bytes(b"new-epub")
 
             class TargetRaceBeforeManifestClient(LocalWebDavClient):
+                supports_existing_overwrite = True
+
                 def put_if_match(self, path, data, etag):
                     if path == manifest_path and data != old_manifest_bytes:
                         remote_epub.write_bytes(concurrent_epub_bytes)
@@ -523,7 +561,7 @@ class PublishTests(unittest.TestCase):
             self.assertEqual(report["status"], "pending")
             self.assertEqual(remote_epub.read_bytes(), concurrent_epub_bytes)
             self.assertEqual(remote_manifest.read_bytes(), old_manifest_bytes)
-            self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
+            self.assertTrue(pending_candidate_path(webdav, report).exists())
 
     def test_safe_append_target_verification_failure_restores_old_epub(self):
         with tempfile.TemporaryDirectory() as td:
@@ -541,6 +579,8 @@ class PublishTests(unittest.TestCase):
             epub.write_bytes(b"new-epub")
 
             class UnreadableAfterTargetWriteClient(LocalWebDavClient):
+                supports_existing_overwrite = True
+
                 def __init__(self, client_root):
                     super().__init__(client_root)
                     self.target_write_seen = False
@@ -588,6 +628,8 @@ class PublishTests(unittest.TestCase):
             epub.write_bytes(b"new-epub")
 
             class MismatchedTargetEtagClient(LocalWebDavClient):
+                supports_existing_overwrite = True
+
                 def put_if_match(self, path, data, etag):
                     result = super().put_if_match(path, data, etag)
                     if path == target_path and data == b"new-epub":
@@ -814,6 +856,8 @@ class PublishTests(unittest.TestCase):
             epub.write_bytes(b"new-epub")
 
             class ManifestConflictAfterTargetPutClient(LocalWebDavClient):
+                supports_existing_overwrite = True
+
                 def put(self, path, data):
                     if path == target_path and data == b"new-epub":
                         super().put(path, data)
@@ -840,7 +884,7 @@ class PublishTests(unittest.TestCase):
             self.assertEqual(report["status"], "pending")
             self.assertEqual(remote_epub.read_bytes(), old_epub_bytes)
             self.assertEqual(remote_manifest.read_bytes(), concurrent_manifest_bytes)
-            self.assertTrue((webdav / "books/.pending/Book - Author/candidate.epub").exists())
+            self.assertTrue(pending_candidate_path(webdav, report).exists())
 
     def test_safe_append_manifest_verification_failure_restores_old_epub_and_manifest(self):
         with tempfile.TemporaryDirectory() as td:
@@ -859,6 +903,8 @@ class PublishTests(unittest.TestCase):
             epub.write_bytes(b"new-epub")
 
             class MismatchedManifestEtagClient(LocalWebDavClient):
+                supports_existing_overwrite = True
+
                 def put_if_match(self, path, data, etag):
                     result = super().put_if_match(path, data, etag)
                     if path == manifest_path and data != old_manifest_bytes:
@@ -889,7 +935,10 @@ class PublishTests(unittest.TestCase):
             epub.write_bytes(b"new")
             timestamps = iter(["20260706T010203Z", "20260706T010204Z"])
 
-            publisher = WebDavPublisher(LocalWebDavClient(webdav), timestamp=lambda: next(timestamps))
+            publisher = WebDavPublisher(
+                LocalWebDavClient(webdav, allow_existing_overwrite=True),
+                timestamp=lambda: next(timestamps),
+            )
             publisher.publish(
                 "/books/Book - Author.epub",
                 epub,
@@ -914,6 +963,36 @@ class PublishTests(unittest.TestCase):
             self.assertEqual((second / "old.epub").read_bytes(), b"old-two")
             self.assertEqual((second / "old.hermes.json").read_bytes(), b'{"old":2}')
 
+    def test_repeated_pending_updates_use_unique_directories(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = root / "webdav"
+            first_epub = root / "candidate-one.epub"
+            second_epub = root / "candidate-two.epub"
+            first_epub.write_bytes(b"candidate-one")
+            second_epub.write_bytes(b"candidate-two")
+            timestamps = iter(["20260706T010203Z", "20260706T010204Z"])
+
+            publisher = WebDavPublisher(LocalWebDavClient(webdav), timestamp=lambda: next(timestamps))
+            first = publisher.publish(
+                "/books/Book - Author.epub",
+                first_epub,
+                manifest(UpdateDecision.BLOCKED_RISKY),
+            )
+            second = publisher.publish(
+                "/books/Book - Author.epub",
+                second_epub,
+                manifest(UpdateDecision.BLOCKED_RISKY),
+            )
+
+            self.assertEqual(first["status"], "pending")
+            self.assertEqual(second["status"], "pending")
+            self.assertNotEqual(first["path"], second["path"])
+            self.assertEqual((webdav / first["path"].strip("/") / "candidate.epub").read_bytes(), b"candidate-one")
+            self.assertEqual((webdav / second["path"].strip("/") / "candidate.epub").read_bytes(), b"candidate-two")
+            self.assertIn("candidate_hash", first)
+            self.assertIn("candidate_hash", second)
+
     def test_safe_overwrite_restores_old_files_when_manifest_put_fails(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -929,6 +1008,8 @@ class PublishTests(unittest.TestCase):
             epub.write_bytes(b"new-epub")
 
             class FailingManifestPutClient(LocalWebDavClient):
+                supports_existing_overwrite = True
+
                 def __init__(self, client_root):
                     super().__init__(client_root)
                     self.epub_put_seen = False

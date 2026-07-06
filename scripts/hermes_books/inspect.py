@@ -122,12 +122,15 @@ class _ReaderBodyParser(HTMLParser):
         anchors = []
         for key, value in attrs:
             if key and key.lower() in {"id", "name", "src", "href"} and value:
-                anchors.append(f'{key.lower()}="{_normalise_epub_href(value.strip())}"')
+                anchors.append(f'{key.lower()}="{_normalise_structure_reference(value)}"')
         return " ".join([tag, *anchors])
 
 
 def _normalise_text(raw: str) -> str:
-    return re.sub(r"\s+", "", raw)
+    cjk = "\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff"
+    text = raw.replace("\xa0", " ")
+    text = re.sub(fr"(?<=[{cjk}])\s+(?=[{cjk}])", "", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _reader_body_text(raw_html: bytes) -> str:
@@ -202,6 +205,21 @@ def _normalise_epub_href(href: str) -> str:
     href_path = parsed.path if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment else href
     normalised = posixpath.normpath(unquote(href_path).replace("\\", "/").lstrip("/"))
     return "" if normalised == "." else normalised
+
+
+def _normalise_structure_reference(href: str) -> str:
+    value = href.strip()
+    parsed = urlsplit(value)
+    if parsed.scheme or parsed.netloc:
+        return value
+
+    base = _normalise_epub_href(value)
+    suffix = ""
+    if parsed.query:
+        suffix += f"?{unquote(parsed.query)}"
+    if parsed.fragment:
+        suffix += f"#{unquote(parsed.fragment)}"
+    return f"{base}{suffix}"
 
 
 def _opf_relative_href(opf_path: str, href: str) -> str:
@@ -300,26 +318,56 @@ def _resource_href(raw_reference: str) -> str:
     return parsed.path if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment else raw_reference
 
 
-def _resource_fingerprint(item: epub.EpubItem, resources_by_href: dict[str, epub.EpubItem]) -> str:
-    chapter_dir = posixpath.dirname(_normalise_epub_href(str(getattr(item, "file_name", ""))))
+def _css_url_references(css: bytes) -> list[str]:
+    text = css.decode("utf-8", errors="replace")
+    return [
+        match.group(2).strip()
+        for match in re.finditer(r"url\(\s*(['\"]?)(.*?)\1\s*\)", text, re.IGNORECASE)
+        if match.group(2).strip()
+    ]
+
+
+def _resource_fingerprint(
+    item: epub.EpubItem,
+    resources_by_href: dict[str, epub.EpubItem],
+    spine_hrefs: set[str],
+) -> str:
+    chapter_href = _normalise_epub_href(str(getattr(item, "file_name", "")))
+    chapter_dir = posixpath.dirname(chapter_href)
     parts: list[str] = []
-    for resource_href, resource in sorted(resources_by_href.items()):
-        if str(getattr(resource, "media_type", "")) == "text/css":
-            parts.append(f"{resource_href}:text/css:{hashlib.sha256(resource.get_content()).hexdigest()}")
-    for raw_reference in sorted(set(_resource_references(item.get_content()))):
-        if raw_reference.startswith(("http://", "https://", "mailto:")):
+
+    def append_reference(raw_reference: str, base_dir: str) -> None:
+        if raw_reference.startswith(("http://", "https://", "mailto:", "data:")):
             parts.append(f"external:{raw_reference}")
-            continue
-        normalised = _normalise_epub_href(posixpath.join(chapter_dir, _resource_href(raw_reference)))
+            return
+        if raw_reference.startswith("#"):
+            return
+
+        normalised = _normalise_epub_href(posixpath.join(base_dir, _resource_href(raw_reference)))
         referenced = resources_by_href.get(normalised)
         if referenced is None:
             parts.append(f"missing:{normalised}")
-            continue
+            return
+
         media_type = str(getattr(referenced, "media_type", ""))
-        if media_type == "application/xhtml+xml":
-            continue
+        if media_type == "application/xhtml+xml" and (
+            normalised == chapter_href or normalised in spine_hrefs
+        ):
+            return
+
         content = referenced.get_content()
         parts.append(f"{normalised}:{media_type}:{hashlib.sha256(content).hexdigest()}")
+
+    for resource_href, resource in sorted(resources_by_href.items()):
+        if str(getattr(resource, "media_type", "")) == "text/css":
+            content = resource.get_content()
+            parts.append(f"{resource_href}:text/css:{hashlib.sha256(content).hexdigest()}")
+            css_dir = posixpath.dirname(resource_href)
+            for css_reference in sorted(set(_css_url_references(content))):
+                append_reference(css_reference, css_dir)
+
+    for raw_reference in sorted(set(_resource_references(item.get_content()))):
+        append_reference(raw_reference, chapter_dir)
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
@@ -328,10 +376,11 @@ def _chapter_info(
     item: epub.EpubItem,
     item_id: str,
     resources_by_href: dict[str, epub.EpubItem],
+    spine_hrefs: set[str],
 ) -> ChapterInfo:
     href = str(getattr(item, "file_name", ""))
     fingerprint, text_chars, structure_fingerprint = _fingerprint(item.get_content())
-    resource_fingerprint = _resource_fingerprint(item, resources_by_href)
+    resource_fingerprint = _resource_fingerprint(item, resources_by_href, spine_hrefs)
     title = _string_value(getattr(item, "title", "")) or href
     return ChapterInfo(
         index,
@@ -387,8 +436,15 @@ def inspect_epub(path: Path) -> EpubInspection:
         for item in book.get_items()
         if str(getattr(item, "file_name", ""))
     }
-    for chapter_index, (item, item_id) in enumerate(_spine_ordered_document_items(book), start=1):
-        report.chapters.append(_chapter_info(chapter_index, item, item_id, resources_by_href))
+    ordered_items = _spine_ordered_document_items(book)
+    spine_hrefs = {
+        _normalise_epub_href(str(getattr(item, "file_name", "")))
+        for item, _ in ordered_items
+    }
+    for chapter_index, (item, item_id) in enumerate(ordered_items, start=1):
+        report.chapters.append(
+            _chapter_info(chapter_index, item, item_id, resources_by_href, spine_hrefs)
+        )
 
     cover_item_ids = _cover_item_ids(book)
     epub3_cover_ids, epub3_cover_hrefs = _epub3_cover_references(path)

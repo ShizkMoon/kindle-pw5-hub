@@ -77,10 +77,15 @@ class WebDavClient(Protocol):
 
 class LocalWebDavClient:
     supports_new_publish = True
-    supports_existing_overwrite = True
+    # A filesystem adapter cannot enforce WebDAV-style CAS against arbitrary
+    # external writers, so existing-book live overwrites stay disabled by default.
+    supports_existing_overwrite = False
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, *, allow_existing_overwrite: bool | None = None) -> None:
         self.root = root.resolve()
+        if allow_existing_overwrite is None:
+            allow_existing_overwrite = type(self).supports_existing_overwrite
+        self.supports_existing_overwrite = allow_existing_overwrite
 
     def _path(self, path: str) -> Path:
         stripped = path.strip("/")
@@ -751,22 +756,37 @@ class WebDavPublisher:
         reason: str | None = None,
     ) -> dict[str, str]:
         slug = Path(target_epub_path).stem
-        pending_dir = posixpath.join(posixpath.dirname(target_epub_path), ".pending", slug)
-        self.client.mkdir(pending_dir)
-        self.client.put(posixpath.join(pending_dir, "candidate.epub"), epub_path.read_bytes())
-        self.client.put(
-            posixpath.join(pending_dir, "candidate.hermes.json"),
-            manifest.to_json().encode("utf-8"),
-        )
-        self.client.put(
-            posixpath.join(pending_dir, "risk-report.md"),
-            (
-                "# Pending update\n\n"
-                f"Decision: {decision_value}\n"
-                + (f"Reason: {reason}\n" if reason else "")
-            ).encode("utf-8"),
-        )
-        report = {"status": "pending", "path": pending_dir}
+        candidate_epub = epub_path.read_bytes()
+        candidate_manifest = manifest.to_json().encode("utf-8")
+        candidate_hash = hashlib.sha256(candidate_epub).hexdigest()
+        pending_root = posixpath.join(posixpath.dirname(target_epub_path), ".pending", slug)
+        pending_name = f"{self.timestamp()}-{candidate_hash[:16]}"
+        risk_report = (
+            "# Pending update\n\n"
+            f"Decision: {decision_value}\n"
+            f"Candidate-SHA256: {candidate_hash}\n"
+            + (f"Reason: {reason}\n" if reason else "")
+        ).encode("utf-8")
+
+        self.client.mkdir(pending_root)
+        for suffix in range(1, 100):
+            directory_name = pending_name if suffix == 1 else f"{pending_name}-{suffix}"
+            pending_dir = posixpath.join(pending_root, directory_name)
+            self.client.mkdir(pending_dir)
+            try:
+                self.client.put_if_absent(posixpath.join(pending_dir, "candidate.epub"), candidate_epub)
+                self.client.put_if_absent(
+                    posixpath.join(pending_dir, "candidate.hermes.json"),
+                    candidate_manifest,
+                )
+                self.client.put_if_absent(posixpath.join(pending_dir, "risk-report.md"), risk_report)
+                break
+            except ConditionalWriteFailed:
+                continue
+        else:
+            raise ConditionalWriteFailed("could not reserve a unique pending update path")
+
+        report = {"status": "pending", "path": pending_dir, "candidate_hash": candidate_hash}
         if reason:
             report["reason"] = reason
         return report

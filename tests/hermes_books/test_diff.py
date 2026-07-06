@@ -24,13 +24,17 @@ def rewrite_chapter(epub_path: Path, chapter_path: str, replace: tuple[str, str]
 
 
 def add_image(epub_path: Path, href: str, data: bytes) -> None:
+    add_resource(epub_path, href, data, "image/jpeg")
+
+
+def add_resource(epub_path: Path, href: str, data: bytes, media_type: str) -> None:
     with zipfile.ZipFile(epub_path, "r") as source:
         entries = {name: source.read(name) for name in source.namelist()}
 
     opf_path = "EPUB/content.opf"
     opf = entries[opf_path].decode("utf-8")
     item_id = Path(href).stem.replace("-", "_")
-    item = f'<item href="{href}" id="{item_id}" media-type="image/jpeg" />'
+    item = f'<item href="{href}" id="{item_id}" media-type="{media_type}" />'
     if item not in opf:
         opf = opf.replace("</manifest>", f"    {item}\n  </manifest>")
     entries[opf_path] = opf.encode("utf-8")
@@ -162,6 +166,19 @@ class DiffTests(unittest.TestCase):
 
             self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
             self.assertIn("existing chapter prefix changed", result.reasons)
+            self.assertIn("chapter 1 fingerprint changed", result.reasons)
+
+    def test_spacing_sensitive_text_change_is_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            old = inspect_epub(make_epub(root / "old.epub", chapters=[("第一章", "New York")]))
+            new = inspect_epub(make_epub(root / "new.epub", chapters=[("第一章", "NewYork")]))
+
+            self.assertNotEqual(old.chapters[0].fingerprint, new.chapters[0].fingerprint)
+
+            result = compare_for_update(manifest(), manifest(), old, new)
+
+            self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
             self.assertIn("chapter 1 fingerprint changed", result.reasons)
 
     def test_canonical_id_mismatch_is_blocked(self):
@@ -334,6 +351,52 @@ class DiffTests(unittest.TestCase):
             self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
             self.assertIn("chapter 1 resources changed", result.reasons)
 
+    def test_same_text_with_changed_non_spine_xhtml_note_is_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            old_path = make_epub(root / "old.epub", chapters=[("第一章", "same body")])
+            new_path = make_epub(root / "new.epub", chapters=[("第一章", "same body")])
+            add_resource(old_path, "notes.xhtml", b"<html><body><aside id='n1'>old note</aside></body></html>", "application/xhtml+xml")
+            add_resource(new_path, "notes.xhtml", b"<html><body><aside id='n1'>new note</aside></body></html>", "application/xhtml+xml")
+            rewrite_chapter(old_path, "chapters/ch0001.xhtml", ("</p>", '</p><a href="../notes.xhtml#n1">note</a>'))
+            rewrite_chapter(new_path, "chapters/ch0001.xhtml", ("</p>", '</p><a href="../notes.xhtml#n1">note</a>'))
+            old = inspect_epub(old_path)
+            new = inspect_epub(new_path)
+
+            self.assertEqual(old.chapters[0].fingerprint, new.chapters[0].fingerprint)
+            self.assertNotEqual(
+                old.chapters[0].resource_fingerprint,
+                new.chapters[0].resource_fingerprint,
+            )
+
+            result = compare_for_update(manifest(), manifest(), old, new)
+
+            self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
+            self.assertIn("chapter 1 resources changed", result.reasons)
+
+    def test_same_text_with_changed_href_fragment_is_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            old_path = make_epub(root / "old.epub", chapters=[("第一章", "same body")])
+            new_path = make_epub(root / "new.epub", chapters=[("第一章", "same body")])
+            add_resource(old_path, "notes.xhtml", b"<html><body><aside id='n1'>note</aside></body></html>", "application/xhtml+xml")
+            add_resource(new_path, "notes.xhtml", b"<html><body><aside id='n1'>note</aside></body></html>", "application/xhtml+xml")
+            rewrite_chapter(old_path, "chapters/ch0001.xhtml", ("</p>", '</p><a href="../notes.xhtml#n1">note</a>'))
+            rewrite_chapter(new_path, "chapters/ch0001.xhtml", ("</p>", '</p><a href="../notes.xhtml#n2">note</a>'))
+            old = inspect_epub(old_path)
+            new = inspect_epub(new_path)
+
+            self.assertEqual(old.chapters[0].fingerprint, new.chapters[0].fingerprint)
+            self.assertNotEqual(
+                old.chapters[0].structure_fingerprint,
+                new.chapters[0].structure_fingerprint,
+            )
+
+            result = compare_for_update(manifest(), manifest(), old, new)
+
+            self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
+            self.assertIn("chapter 1 structure changed", result.reasons)
+
     def test_same_text_with_changed_css_resource_is_blocked(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -343,6 +406,28 @@ class DiffTests(unittest.TestCase):
             new = inspect_epub(
                 make_epub(root / "new.epub", chapters=[("第一章", "same body")], css="p { line-height: 1.8; }")
             )
+
+            self.assertEqual(old.chapters[0].fingerprint, new.chapters[0].fingerprint)
+            self.assertNotEqual(
+                old.chapters[0].resource_fingerprint,
+                new.chapters[0].resource_fingerprint,
+            )
+
+            result = compare_for_update(manifest(), manifest(), old, new)
+
+            self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
+            self.assertIn("chapter 1 resources changed", result.reasons)
+
+    def test_same_text_with_changed_css_url_dependency_is_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            css = "@font-face { font-family: novel; src: url('../fonts/novel.woff2'); }"
+            old_path = make_epub(root / "old.epub", chapters=[("第一章", "same body")], css=css)
+            new_path = make_epub(root / "new.epub", chapters=[("第一章", "same body")], css=css)
+            add_resource(old_path, "fonts/novel.woff2", b"old font", "font/woff2")
+            add_resource(new_path, "fonts/novel.woff2", b"new font", "font/woff2")
+            old = inspect_epub(old_path)
+            new = inspect_epub(new_path)
 
             self.assertEqual(old.chapters[0].fingerprint, new.chapters[0].fingerprint)
             self.assertNotEqual(

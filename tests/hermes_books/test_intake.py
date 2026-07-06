@@ -28,6 +28,10 @@ def required_epubcheck_config() -> HermesConfig:
     )
 
 
+def pending_candidate_path(webdav_root: Path, report: dict[str, str]) -> Path:
+    return webdav_root / report["path"].strip("/") / "candidate.epub"
+
+
 class IntakeTests(unittest.TestCase):
     def test_txt_input_generates_reports_and_publishes_new_book(self):
         with tempfile.TemporaryDirectory() as td:
@@ -206,7 +210,7 @@ class IntakeTests(unittest.TestCase):
             self.assertEqual(result.publish_report["status"], "pending")
             self.assertEqual(remote_epub.read_bytes(), mutated_remote_bytes)
             self.assertNotEqual(remote_epub.read_bytes(), result.output_epub.read_bytes())
-            self.assertTrue((webdav_root / "books/.pending/Book - Author/candidate.epub").exists())
+            self.assertTrue(pending_candidate_path(webdav_root, result.publish_report).exists())
 
     def test_existing_remote_epub_without_manifest_goes_pending(self):
         with tempfile.TemporaryDirectory() as td:
@@ -242,6 +246,40 @@ class IntakeTests(unittest.TestCase):
             update_diff = result.reports_dir / "update-diff.md"
             self.assertTrue(update_diff.exists())
             self.assertIn("remote target exists without Hermes manifest", update_diff.read_text(encoding="utf-8"))
+
+    def test_remote_state_probe_failure_writes_local_reports_without_crashing(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source_epub = make_epub(root / "source.epub")
+
+            class UnavailableRemoteClient(LocalWebDavClient):
+                def exists(self, path):
+                    raise RuntimeError("remote unavailable")
+
+                def stat(self, path):
+                    raise RuntimeError("remote unavailable")
+
+                def put(self, path, data):
+                    raise AssertionError("remote pending upload must not be attempted after state probe failure")
+
+                def put_if_absent(self, path, data):
+                    raise AssertionError("remote publish must not be attempted after state probe failure")
+
+            result = run_intake(
+                input_path=source_epub,
+                title="Book",
+                author="Author",
+                runs_root=root / "runs",
+                config=no_network_config(),
+                webdav_client=UnavailableRemoteClient(root / "webdav"),
+            )
+
+            self.assertEqual(result.publish_report["status"], "pending")
+            self.assertIn("remote target state unavailable", result.publish_report["reason"])
+            self.assertEqual(result.manifest.update_decision, UpdateDecision.BLOCKED_RISKY)
+            self.assertTrue((result.reports_dir / "manifest.json").exists())
+            self.assertTrue((result.reports_dir / "publish-report.json").exists())
+            self.assertTrue((result.reports_dir / "update-diff.md").exists())
 
     def test_unreadable_existing_remote_manifest_goes_pending_without_touching_old_target(self):
         with tempfile.TemporaryDirectory() as td:
@@ -450,7 +488,7 @@ class IntakeTests(unittest.TestCase):
             self.assertEqual(result.publish_report["status"], "pending")
             self.assertEqual(result.manifest.update_decision, UpdateDecision.BLOCKED_RISKY)
             self.assertEqual(remote_epub.read_bytes(), invalid_remote_bytes)
-            self.assertTrue((root / "webdav/books/.pending/Book - Author/candidate.epub").exists())
+            self.assertTrue(pending_candidate_path(root / "webdav", result.publish_report).exists())
             update_diff = result.reports_dir / "update-diff.md"
             self.assertTrue(update_diff.exists())
             self.assertIn("remote EPUB unreadable", update_diff.read_text(encoding="utf-8"))
