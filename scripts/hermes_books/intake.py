@@ -346,13 +346,20 @@ def run_intake(
     manifest.asset_report = asset_report_data
     (paths.reports_dir / "manifest.json").write_text(manifest.to_json(), encoding="utf-8")
 
-    publish_report = WebDavPublisher(webdav_client).publish(
-        job.webdav_target_path,
-        output_epub,
-        manifest,
-        expected_old_epub_hash=expected_old_epub_hash,
-        expected_old_manifest_hash=expected_old_manifest_hash,
-    )
+    try:
+        publish_report = WebDavPublisher(webdav_client).publish(
+            job.webdav_target_path,
+            output_epub,
+            manifest,
+            expected_old_epub_hash=expected_old_epub_hash,
+            expected_old_manifest_hash=expected_old_manifest_hash,
+        )
+    except Exception as exc:
+        publish_report = {
+            "status": "pending-local",
+            "path": job.webdav_target_path,
+            "reason": f"publish failed: {exc}",
+        }
     (paths.reports_dir / "publish-report.json").write_text(
         json.dumps(publish_report, ensure_ascii=False, indent=2),
         encoding="utf-8",

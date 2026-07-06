@@ -217,12 +217,55 @@ class DiffTests(unittest.TestCase):
 
             self.assertEqual(result.decision, UpdateDecision.SAFE_METADATA)
 
+    def test_initial_title_heading_anchor_change_is_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            old_path = make_epub(root / "old.epub", chapters=[("第一章", "same body")])
+            new_path = make_epub(root / "new.epub", chapters=[("第一章", "same body")])
+            rewrite_chapter(old_path, "chapters/ch0001.xhtml", ("<h2>第一章</h2>", '<h2 id="old-title">第一章</h2>'))
+            rewrite_chapter(new_path, "chapters/ch0001.xhtml", ("<h2>第一章</h2>", '<h2 id="new-title">第一章</h2>'))
+            old = inspect_epub(old_path)
+            new = inspect_epub(new_path)
+
+            self.assertEqual(old.chapters[0].fingerprint, new.chapters[0].fingerprint)
+            self.assertNotEqual(
+                old.chapters[0].structure_fingerprint,
+                new.chapters[0].structure_fingerprint,
+            )
+
+            result = compare_for_update(manifest(), manifest(), old, new)
+
+            self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
+            self.assertIn("chapter 1 structure changed", result.reasons)
+
     def test_same_text_with_changed_paragraph_structure_is_blocked(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             old = inspect_epub(make_epub(root / "old.epub", chapters=[("第一章", "AB")]))
             new_path = make_epub(root / "new.epub", chapters=[("第一章", "AB")])
             rewrite_chapter(new_path, "chapters/ch0001.xhtml", ("<p>AB</p>", "<p>A</p><p>B</p>"))
+            new = inspect_epub(new_path)
+
+            self.assertEqual(old.chapters[0].fingerprint, new.chapters[0].fingerprint)
+            self.assertNotEqual(
+                old.chapters[0].structure_fingerprint,
+                new.chapters[0].structure_fingerprint,
+            )
+
+            result = compare_for_update(manifest(), manifest(), old, new)
+
+            self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
+            self.assertIn("chapter 1 structure changed", result.reasons)
+
+    def test_same_text_with_changed_css_class_attribute_is_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            css = ".keep { line-height: 1.4; } .move { line-height: 1.8; }"
+            old_path = make_epub(root / "old.epub", chapters=[("第一章", "same body")], css=css)
+            new_path = make_epub(root / "new.epub", chapters=[("第一章", "same body")], css=css)
+            rewrite_chapter(old_path, "chapters/ch0001.xhtml", ("<p>same body</p>", '<p class="keep">same body</p>'))
+            rewrite_chapter(new_path, "chapters/ch0001.xhtml", ("<p>same body</p>", '<p class="move">same body</p>'))
+            old = inspect_epub(old_path)
             new = inspect_epub(new_path)
 
             self.assertEqual(old.chapters[0].fingerprint, new.chapters[0].fingerprint)
@@ -374,6 +417,32 @@ class DiffTests(unittest.TestCase):
             self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
             self.assertIn("chapter 1 resources changed", result.reasons)
 
+    def test_same_text_with_non_spine_note_transitive_image_change_is_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            note = b"<html><body><aside id='n1'><img src='images/note.jpg'/></aside></body></html>"
+            old_path = make_epub(root / "old.epub", chapters=[("第一章", "same body")])
+            new_path = make_epub(root / "new.epub", chapters=[("第一章", "same body")])
+            add_resource(old_path, "notes.xhtml", note, "application/xhtml+xml")
+            add_resource(new_path, "notes.xhtml", note, "application/xhtml+xml")
+            add_image(old_path, "images/note.jpg", b"old note image")
+            add_image(new_path, "images/note.jpg", b"new note image")
+            rewrite_chapter(old_path, "chapters/ch0001.xhtml", ("</p>", '</p><a href="../notes.xhtml#n1">note</a>'))
+            rewrite_chapter(new_path, "chapters/ch0001.xhtml", ("</p>", '</p><a href="../notes.xhtml#n1">note</a>'))
+            old = inspect_epub(old_path)
+            new = inspect_epub(new_path)
+
+            self.assertEqual(old.chapters[0].fingerprint, new.chapters[0].fingerprint)
+            self.assertNotEqual(
+                old.chapters[0].resource_fingerprint,
+                new.chapters[0].resource_fingerprint,
+            )
+
+            result = compare_for_update(manifest(), manifest(), old, new)
+
+            self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
+            self.assertIn("chapter 1 resources changed", result.reasons)
+
     def test_same_text_with_changed_href_fragment_is_blocked(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -426,6 +495,30 @@ class DiffTests(unittest.TestCase):
             new_path = make_epub(root / "new.epub", chapters=[("第一章", "same body")], css=css)
             add_resource(old_path, "fonts/novel.woff2", b"old font", "font/woff2")
             add_resource(new_path, "fonts/novel.woff2", b"new font", "font/woff2")
+            old = inspect_epub(old_path)
+            new = inspect_epub(new_path)
+
+            self.assertEqual(old.chapters[0].fingerprint, new.chapters[0].fingerprint)
+            self.assertNotEqual(
+                old.chapters[0].resource_fingerprint,
+                new.chapters[0].resource_fingerprint,
+            )
+
+            result = compare_for_update(manifest(), manifest(), old, new)
+
+            self.assertEqual(result.decision, UpdateDecision.BLOCKED_RISKY)
+            self.assertIn("chapter 1 resources changed", result.reasons)
+
+    def test_same_text_with_inline_style_url_dependency_is_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            old_path = make_epub(root / "old.epub", chapters=[("第一章", "same body")])
+            new_path = make_epub(root / "new.epub", chapters=[("第一章", "same body")])
+            add_image(old_path, "images/bg.jpg", b"old background")
+            add_image(new_path, "images/bg.jpg", b"new background")
+            inline_style = '<p style="background-image: url(../images/bg.jpg)">same body</p>'
+            rewrite_chapter(old_path, "chapters/ch0001.xhtml", ("<p>same body</p>", inline_style))
+            rewrite_chapter(new_path, "chapters/ch0001.xhtml", ("<p>same body</p>", inline_style))
             old = inspect_epub(old_path)
             new = inspect_epub(new_path)
 

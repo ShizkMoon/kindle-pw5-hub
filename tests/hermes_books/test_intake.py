@@ -281,6 +281,42 @@ class IntakeTests(unittest.TestCase):
             self.assertTrue((result.reports_dir / "publish-report.json").exists())
             self.assertTrue((result.reports_dir / "update-diff.md").exists())
 
+    def test_pending_publish_failure_writes_local_report_without_crashing(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav_root = root / "webdav"
+            source_epub = make_epub(root / "source.epub")
+
+            class PendingUploadFailsClient(LocalWebDavClient):
+                def put_if_absent(self, path, data):
+                    if "/.pending/" in path:
+                        raise RuntimeError("pending upload failed")
+                    return super().put_if_absent(path, data)
+
+            client = PendingUploadFailsClient(webdav_root)
+            run_intake(
+                input_path=source_epub,
+                title="Book",
+                author="Author",
+                runs_root=root / "old-runs",
+                config=no_network_config(),
+                webdav_client=client,
+            )
+            (webdav_root / "books/Book - Author.hermes.json").unlink()
+
+            result = run_intake(
+                input_path=source_epub,
+                title="Book",
+                author="Author",
+                runs_root=root / "new-runs",
+                config=no_network_config(),
+                webdav_client=client,
+            )
+
+            self.assertEqual(result.publish_report["status"], "pending-local")
+            self.assertIn("pending upload failed", result.publish_report["reason"])
+            self.assertTrue((result.reports_dir / "publish-report.json").exists())
+
     def test_unreadable_existing_remote_manifest_goes_pending_without_touching_old_target(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

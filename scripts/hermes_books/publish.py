@@ -258,16 +258,6 @@ class WebDavPublisher:
     def _utc_timestamp(self) -> str:
         return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
-    def _backup_dir(self, target_epub_path: str, slug: str) -> str:
-        backup_root = posixpath.join(posixpath.dirname(target_epub_path), ".backups", slug)
-        timestamp = self.timestamp()
-        backup_dir = posixpath.join(backup_root, timestamp)
-        suffix = 2
-        while self.client.exists(posixpath.join(backup_dir, "old.epub")):
-            backup_dir = posixpath.join(backup_root, f"{timestamp}-{suffix}")
-            suffix += 1
-        return backup_dir
-
     def _read_existing_remote(
         self,
         target_epub_path: str,
@@ -705,12 +695,19 @@ class WebDavPublisher:
                 "existing manifest could not be overwritten conditionally",
             )
         except Exception:
-            self._safe_put_if_match(
+            rollback_ok = self._safe_put_if_match(
                 target_epub_path,
                 existing.epub_bytes,
                 target_write_etag,
             )
-            raise
+            rollback_status = "target rollback succeeded" if rollback_ok else "target rollback could not be verified"
+            return self._pending_update(
+                target_epub_path,
+                epub_path,
+                manifest,
+                decision_value,
+                f"existing manifest write failed after target publish; {rollback_status}",
+            )
 
         manifest_write_etag = self._verified_etag_after_write(
             manifest_path,
@@ -768,23 +765,36 @@ class WebDavPublisher:
             + (f"Reason: {reason}\n" if reason else "")
         ).encode("utf-8")
 
-        self.client.mkdir(pending_root)
-        for suffix in range(1, 100):
-            directory_name = pending_name if suffix == 1 else f"{pending_name}-{suffix}"
-            pending_dir = posixpath.join(pending_root, directory_name)
-            self.client.mkdir(pending_dir)
-            try:
-                self.client.put_if_absent(posixpath.join(pending_dir, "candidate.epub"), candidate_epub)
-                self.client.put_if_absent(
-                    posixpath.join(pending_dir, "candidate.hermes.json"),
-                    candidate_manifest,
-                )
-                self.client.put_if_absent(posixpath.join(pending_dir, "risk-report.md"), risk_report)
-                break
-            except ConditionalWriteFailed:
-                continue
-        else:
-            raise ConditionalWriteFailed("could not reserve a unique pending update path")
+        def pending_local(error: Exception | str) -> dict[str, str]:
+            error_message = str(error)
+            reason_parts = [part for part in [reason, f"pending upload failed: {error_message}"] if part]
+            return {
+                "status": "pending-local",
+                "path": target_epub_path,
+                "candidate_hash": candidate_hash,
+                "reason": "; ".join(reason_parts),
+            }
+
+        try:
+            self.client.mkdir(pending_root)
+            for suffix in range(1, 100):
+                directory_name = pending_name if suffix == 1 else f"{pending_name}-{suffix}"
+                pending_dir = posixpath.join(pending_root, directory_name)
+                self.client.mkdir(pending_dir)
+                try:
+                    self.client.put_if_absent(posixpath.join(pending_dir, "candidate.epub"), candidate_epub)
+                    self.client.put_if_absent(
+                        posixpath.join(pending_dir, "candidate.hermes.json"),
+                        candidate_manifest,
+                    )
+                    self.client.put_if_absent(posixpath.join(pending_dir, "risk-report.md"), risk_report)
+                    break
+                except ConditionalWriteFailed:
+                    continue
+            else:
+                return pending_local("could not reserve a unique pending update path")
+        except Exception as exc:
+            return pending_local(exc)
 
         report = {"status": "pending", "path": pending_dir, "candidate_hash": candidate_hash}
         if reason:

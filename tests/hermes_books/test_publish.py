@@ -993,7 +993,27 @@ class PublishTests(unittest.TestCase):
             self.assertIn("candidate_hash", first)
             self.assertIn("candidate_hash", second)
 
-    def test_safe_overwrite_restores_old_files_when_manifest_put_fails(self):
+    def test_pending_upload_failure_returns_local_pending_report(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            webdav = root / "webdav"
+            epub = root / "candidate.epub"
+            epub.write_bytes(b"new")
+
+            class FailingPendingClient(LocalWebDavClient):
+                def put_if_absent(self, path, data):
+                    if "/.pending/" in path:
+                        raise RuntimeError("pending upload failed")
+                    return super().put_if_absent(path, data)
+
+            publisher = WebDavPublisher(FailingPendingClient(webdav))
+            report = publisher.publish("/books/Book - Author.epub", epub, manifest(UpdateDecision.BLOCKED_RISKY))
+
+            self.assertEqual(report["status"], "pending-local")
+            self.assertIn("pending upload failed", report["reason"])
+            self.assertEqual(report["path"], "/books/Book - Author.epub")
+
+    def test_safe_overwrite_restores_old_files_and_reports_pending_when_manifest_put_fails(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
             webdav = root / "webdav"
@@ -1041,15 +1061,16 @@ class PublishTests(unittest.TestCase):
 
             publisher = WebDavPublisher(FailingManifestPutClient(webdav))
 
-            with self.assertRaisesRegex(RuntimeError, "injected manifest PUT failure"):
-                publisher.publish(
-                    "/books/Book - Author.epub",
-                    epub,
-                    manifest(UpdateDecision.SAFE_APPEND),
-                    expected_old_epub_hash=sha256_bytes(old_epub_bytes),
-                    expected_old_manifest_hash=sha256_bytes(old_manifest_bytes),
-                )
+            report = publisher.publish(
+                "/books/Book - Author.epub",
+                epub,
+                manifest(UpdateDecision.SAFE_APPEND),
+                expected_old_epub_hash=sha256_bytes(old_epub_bytes),
+                expected_old_manifest_hash=sha256_bytes(old_manifest_bytes),
+            )
 
+            self.assertEqual(report["status"], "pending")
+            self.assertIn("existing manifest write failed", report["reason"])
             self.assertEqual(remote_epub.read_bytes(), old_epub_bytes)
             self.assertEqual(remote_manifest.read_bytes(), old_manifest_bytes)
 

@@ -60,6 +60,7 @@ class _ReaderBodyParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self._body_depth = 0
         self._ignored_depth = 0
+        self._ignored_heading_depth = 0
         self._body_content_seen = False
         self._texts: list[str] = []
         self._structure: list[str] = []
@@ -73,25 +74,32 @@ class _ReaderBodyParser(HTMLParser):
             return
         if self._body_depth and not self._ignored_depth:
             self._structure.append(f"<{self._structure_tag(tag, attrs)}/>")
-            self._body_content_seen = True
+            if not self._ignored_heading_depth:
+                self._body_content_seen = True
 
     def handle_endtag(self, tag: str) -> None:
         tag = tag.lower()
         if tag == "head" and self._ignored_depth:
             self._ignored_depth -= 1
             return
-        if tag in {"h1", "h2", "h3", "h4", "h5", "h6"} and self._ignored_depth:
-            self._ignored_depth -= 1
-            self._body_content_seen = True
+        if self._ignored_depth:
             return
-        if self._body_depth and not self._ignored_depth and tag != "body":
+        if self._ignored_heading_depth:
+            if tag != "body":
+                self._structure.append(f"</{tag}>")
+            if tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+                self._ignored_heading_depth -= 1
+                if not self._ignored_heading_depth:
+                    self._body_content_seen = True
+            return
+        if self._body_depth and tag != "body":
             self._structure.append(f"</{tag}>")
             self._body_content_seen = True
         if tag == "body" and self._body_depth:
             self._body_depth -= 1
 
     def handle_data(self, data: str) -> None:
-        if self._body_depth and not self._ignored_depth:
+        if self._body_depth and not self._ignored_depth and not self._ignored_heading_depth:
             self._texts.append(data)
             text = _normalise_text(data)
             if text:
@@ -112,17 +120,20 @@ class _ReaderBodyParser(HTMLParser):
             self._ignored_depth += 1
             return
         if tag in {"h1", "h2", "h3", "h4", "h5", "h6"} and self._body_depth and not self._body_content_seen:
-            self._ignored_depth += 1
+            self._structure.append(f"<{self._structure_tag(tag, attrs)}>")
+            self._ignored_heading_depth += 1
             return
         if self._body_depth and not self._ignored_depth and tag != "body":
             self._structure.append(f"<{self._structure_tag(tag, attrs)}>")
-            self._body_content_seen = True
+            if not self._ignored_heading_depth:
+                self._body_content_seen = True
 
     def _structure_tag(self, tag: str, attrs: list[tuple[str, str | None]]) -> str:
         anchors = []
         for key, value in attrs:
-            if key and key.lower() in {"id", "name", "src", "href"} and value:
-                anchors.append(f'{key.lower()}="{_normalise_structure_reference(value)}"')
+            if key and value:
+                attr = key.lower()
+                anchors.append(f'{attr}="{_normalise_structure_attr(attr, value)}"')
         return " ".join([tag, *anchors])
 
 
@@ -222,6 +233,30 @@ def _normalise_structure_reference(href: str) -> str:
     return f"{base}{suffix}"
 
 
+def _srcset_references(value: str) -> list[str]:
+    references: list[str] = []
+    for candidate in value.split(","):
+        parts = candidate.strip().split()
+        if parts:
+            references.append(parts[0])
+    return references
+
+
+def _normalise_srcset(value: str) -> str:
+    return ", ".join(_normalise_structure_reference(reference) for reference in _srcset_references(value))
+
+
+def _normalise_structure_attr(attr: str, value: str) -> str:
+    clean = value.strip()
+    if attr in {"href", "src", "poster"} or attr.endswith(":href"):
+        return _normalise_structure_reference(clean)
+    if attr == "srcset":
+        return _normalise_srcset(clean)
+    if attr == "class":
+        return " ".join(sorted(clean.split()))
+    return re.sub(r"\s+", " ", clean)
+
+
 def _opf_relative_href(opf_path: str, href: str) -> str:
     opf_dir = posixpath.dirname(_normalise_epub_href(opf_path))
     if not opf_dir:
@@ -293,23 +328,43 @@ def _resource_references(raw_html: bytes) -> list[str]:
         def __init__(self) -> None:
             super().__init__(convert_charrefs=True)
             self.references: list[str] = []
+            self.inline_css: list[str] = []
+            self._style_depth = 0
 
         def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+            if tag.lower() == "style":
+                self._style_depth += 1
             self._collect(attrs)
 
         def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
             self._collect(attrs)
 
+        def handle_endtag(self, tag: str) -> None:
+            if tag.lower() == "style" and self._style_depth:
+                self._style_depth -= 1
+
+        def handle_data(self, data: str) -> None:
+            if self._style_depth:
+                self.inline_css.append(data)
+
         def _collect(self, attrs: list[tuple[str, str | None]]) -> None:
             for key, value in attrs:
-                if key and key.lower() in {"src", "href"} and value:
-                    if value.startswith("#"):
-                        continue
-                    self.references.append(value)
+                if not key or not value:
+                    continue
+                attr = key.lower()
+                if attr in {"src", "href", "poster"} or attr.endswith(":href"):
+                    if not value.startswith("#"):
+                        self.references.append(value)
+                elif attr == "srcset":
+                    self.references.extend(_srcset_references(value))
+                elif attr == "style":
+                    self.inline_css.append(value)
 
     parser = ReferenceParser()
     parser.feed(raw_html.decode("utf-8", errors="replace"))
     parser.close()
+    for css in parser.inline_css:
+        parser.references.extend(_css_url_references(css))
     return parser.references
 
 
@@ -318,8 +373,25 @@ def _resource_href(raw_reference: str) -> str:
     return parsed.path if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment else raw_reference
 
 
-def _css_url_references(css: bytes) -> list[str]:
-    text = css.decode("utf-8", errors="replace")
+def _normalise_resource_reference(raw_reference: str, base_dir: str) -> str:
+    reference = raw_reference.strip()
+    parsed = urlsplit(reference)
+    if parsed.scheme or parsed.netloc:
+        return reference
+    if reference.startswith("#"):
+        return reference
+
+    base = _normalise_epub_href(posixpath.join(base_dir, _resource_href(reference)))
+    suffix = ""
+    if parsed.query:
+        suffix += f"?{unquote(parsed.query)}"
+    if parsed.fragment:
+        suffix += f"#{unquote(parsed.fragment)}"
+    return f"{base}{suffix}"
+
+
+def _css_url_references(css: bytes | str) -> list[str]:
+    text = css.decode("utf-8", errors="replace") if isinstance(css, bytes) else css
     return [
         match.group(2).strip()
         for match in re.finditer(r"url\(\s*(['\"]?)(.*?)\1\s*\)", text, re.IGNORECASE)
@@ -335,8 +407,13 @@ def _resource_fingerprint(
     chapter_href = _normalise_epub_href(str(getattr(item, "file_name", "")))
     chapter_dir = posixpath.dirname(chapter_href)
     parts: list[str] = []
+    visited: set[str] = set()
 
     def append_reference(raw_reference: str, base_dir: str) -> None:
+        raw_reference = raw_reference.strip()
+        if not raw_reference:
+            return
+        parts.append(f"ref:{_normalise_resource_reference(raw_reference, base_dir)}")
         if raw_reference.startswith(("http://", "https://", "mailto:", "data:")):
             parts.append(f"external:{raw_reference}")
             return
@@ -354,21 +431,27 @@ def _resource_fingerprint(
             normalised == chapter_href or normalised in spine_hrefs
         ):
             return
+        if normalised in visited:
+            return
 
+        visited.add(normalised)
         content = referenced.get_content()
         parts.append(f"{normalised}:{media_type}:{hashlib.sha256(content).hexdigest()}")
+        resource_dir = posixpath.dirname(normalised)
+        if media_type == "text/css":
+            for css_reference in sorted(set(_css_url_references(content))):
+                append_reference(css_reference, resource_dir)
+        elif media_type == "application/xhtml+xml" or media_type == "image/svg+xml" or media_type.endswith("+xml"):
+            for nested_reference in sorted(set(_resource_references(content))):
+                append_reference(nested_reference, resource_dir)
 
     for resource_href, resource in sorted(resources_by_href.items()):
         if str(getattr(resource, "media_type", "")) == "text/css":
-            content = resource.get_content()
-            parts.append(f"{resource_href}:text/css:{hashlib.sha256(content).hexdigest()}")
-            css_dir = posixpath.dirname(resource_href)
-            for css_reference in sorted(set(_css_url_references(content))):
-                append_reference(css_reference, css_dir)
+            append_reference(resource_href, "")
 
     for raw_reference in sorted(set(_resource_references(item.get_content()))):
         append_reference(raw_reference, chapter_dir)
-    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+    return hashlib.sha256("\n".join(sorted(set(parts))).encode("utf-8")).hexdigest()
 
 
 def _chapter_info(
