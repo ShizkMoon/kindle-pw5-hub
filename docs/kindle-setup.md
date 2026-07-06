@@ -55,6 +55,16 @@ Hermes 默认发布到：
 
 KOReader Cloud Storage 只需要指向 WebDAV 根路径或 `/books`。如果直接指向 `/books`，日常界面更干净；如果指向根路径，可以查看 `.pending` 和 `.backups`。
 
+Hermes 端可以通过本地 run report 管理 pending：
+
+```powershell
+python -m scripts.hermes_books.pending list --runs-root runs
+python -m scripts.hermes_books.pending approve --report runs\<job-id>\reports\publish-report.json --config config/hermes-books.yaml --confirm "<candidate_hash>"
+python -m scripts.hermes_books.pending reject --report runs\<job-id>\reports\publish-report.json --config config/hermes-books.yaml --confirm "<candidate_hash>"
+```
+
+批准会先备份旧书再覆盖 live 路径；拒绝只删除 pending 候选文件。
+
 ## KOReader metadata location
 
 Hermes 的旧书覆盖策略依赖 KOReader 的 metadata 存储模式。

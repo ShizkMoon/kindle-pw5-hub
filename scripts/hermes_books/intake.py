@@ -13,6 +13,7 @@ from typing import Any
 
 from .assets import AssetEnricher, AssetFetcher, AssetProvider, apply_auto_adopted_assets
 from .build import build_draft_from_txt, normalize_existing_epub
+from .cleaning import CleaningAnalyzer, CleaningPlanner, write_cleaning_reports
 from .config import HermesConfig, MetadataEnrichmentMode
 from .diff import compare_for_update
 from .inspect import inspect_epub, write_quality_report
@@ -78,6 +79,7 @@ def _failed_before_inspection_result(
     output_epub: Path,
     reports_dir: Path,
     error: Exception,
+    config: HermesConfig,
 ) -> IntakeResult:
     reason = f"intake failed before EPUB inspection: {error}"
     issue = {
@@ -117,10 +119,17 @@ def _failed_before_inspection_result(
         f"- [HIGH] INTAKE_FAILED_BEFORE_INSPECTION: {reason} {output_epub}\n",
         encoding="utf-8",
     )
+    asset_report = {"status": "skipped", "reason": reason}
     (reports_dir / "asset-report.json").write_text(
-        json.dumps({"status": "skipped", "reason": reason}, ensure_ascii=False, indent=2),
+        json.dumps(asset_report, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    metadata_report = MetadataEnricher(config.metadata_enrichment).skipped(reason)
+    write_metadata_reports(metadata_report, reports_dir)
+    manifest.asset_report = asset_report
+    manifest.metadata_report = metadata_report.to_dict()
+    cleaning_report = CleaningPlanner(config.text_cleaning).skipped(reason)
+    write_cleaning_reports(cleaning_report, reports_dir)
     validation = EpubValidationResult(
         status="skipped",
         warnings=[{"id": "INTAKE_FAILED_BEFORE_INSPECTION", "message": reason}],
@@ -374,6 +383,7 @@ def run_intake(
     metadata_provider: MetadataProvider | None = None,
     metadata_reasoner: MetadataReasoner | None = None,
     metadata_cover_fetcher: Callable[[Any], bytes | None] | None = None,
+    cleaning_analyzer: CleaningAnalyzer | None = None,
 ) -> IntakeResult:
     config = config or HermesConfig.load(None)
     books_path = _valid_books_path(config.webdav.books_path)
@@ -391,7 +401,12 @@ def run_intake(
     output_epub = snapshot.raw_path
     try:
         if job.input_format == "txt":
-            candidate = build_draft_from_txt(job, snapshot.raw_path, paths.draft_dir)
+            candidate = build_draft_from_txt(
+                job,
+                snapshot.raw_path,
+                paths.draft_dir,
+                language=config.pipeline.language,
+            )
             output_epub = normalize_existing_epub(job, candidate, paths.normalized_dir)
         elif job.input_format == "epub":
             output_epub = normalize_existing_epub(job, snapshot.raw_path, paths.normalized_dir)
@@ -406,6 +421,7 @@ def run_intake(
             output_epub,
             paths.reports_dir,
             exc,
+            config,
         )
 
     output_epub, inspection, metadata_report_data = _run_metadata_enrichment(
@@ -428,6 +444,9 @@ def run_intake(
     )
     if apply_auto_adopted_assets(output_epub, asset_report, asset_cache_dir, asset_fetcher):
         inspection = inspect_epub(output_epub)
+
+    cleaning_report = CleaningPlanner(config.text_cleaning).plan(inspection, analyzer=cleaning_analyzer)
+    write_cleaning_reports(cleaning_report, paths.reports_dir)
 
     write_quality_report(inspection, paths.reports_dir / "quality-report.md")
     asset_report_data = json.loads(asset_report.to_json())

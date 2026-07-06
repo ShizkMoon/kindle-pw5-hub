@@ -332,8 +332,30 @@ class IntakeTests(unittest.TestCase):
             self.assertEqual(result.manifest.update_decision, UpdateDecision.BLOCKED_RISKY)
             self.assertFalse((root / "webdav/books/Book - Author.epub").exists())
             self.assertTrue((result.reports_dir / "quality-report.md").exists())
+            self.assertTrue((result.reports_dir / "metadata-report.json").exists())
+            metadata_json = json.loads((result.reports_dir / "metadata-report.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata_json["status"], "skipped")
+            self.assertIn("intake failed before EPUB inspection", metadata_json["errors"][0])
             self.assertTrue((result.reports_dir / "manifest.json").exists())
             self.assertTrue((result.reports_dir / "publish-report.json").exists())
+
+    def test_intake_writes_cleaning_report_without_model_calls(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source_epub = make_epub(root / "source.epub")
+
+            result = run_intake(
+                input_path=source_epub,
+                title="Book",
+                author="Author",
+                runs_root=root / "runs",
+                config=no_network_config(),
+                webdav_client=LocalWebDavClient(root / "webdav"),
+            )
+
+            cleaning_json = json.loads((result.reports_dir / "cleaning-report.json").read_text(encoding="utf-8"))
+            self.assertEqual(cleaning_json["status"], "planned")
+            self.assertEqual(cleaning_json["cost_plan"]["selected_route"], "rules-first-report-only")
 
     def test_auto_adopted_cover_is_inserted_before_validation_and_publish(self):
         with tempfile.TemporaryDirectory() as td:

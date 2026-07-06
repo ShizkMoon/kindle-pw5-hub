@@ -71,6 +71,45 @@ class MetadataTests(unittest.TestCase):
         self.assertEqual(report.status, "blocked")
         self.assertEqual(report.conflicts[0].field, "identity")
 
+    def test_single_source_fields_are_reported_when_disabled(self):
+        config = MetadataEnrichmentConfig(allow_single_source_fields=False)
+        evidence = [
+            MetadataEvidence("store-1", "store", "https://example.test/books/1", {"title": "标准书名"}),
+        ]
+        resolution = MetadataResolution(
+            decisions=[
+                MetadataDecision("title", "旧书名", "标准书名", "apply", 0.99, ["store-1"], "one source only"),
+            ]
+        )
+
+        report = MetadataEnricher(config).decide(evidence, resolution)
+
+        self.assertEqual(report.status, "reported")
+        self.assertEqual(report.applied_decisions, [])
+        self.assertEqual(report.reported_decisions[0].field, "title")
+
+    def test_identity_conflict_can_be_reported_instead_of_blocking(self):
+        config = MetadataEnrichmentConfig(block_on_conflicting_identity=False)
+        resolution = MetadataResolution(
+            decisions=[
+                MetadataDecision(
+                    "identity",
+                    "Book 1",
+                    "Book 2",
+                    "block",
+                    0.98,
+                    ["store-1"],
+                    "evidence points to another volume",
+                ),
+            ]
+        )
+
+        report = MetadataEnricher(config).decide([], resolution)
+
+        self.assertEqual(report.status, "reported")
+        self.assertEqual(report.conflicts, [])
+        self.assertEqual(report.reported_decisions[0].field, "identity")
+
     def test_write_metadata_reports(self):
         report = MetadataEnricher(MetadataEnrichmentConfig()).decide(
             [MetadataEvidence("store-1", "store", "https://example.test/books/1", {"title": "标准书名"})],

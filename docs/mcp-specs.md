@@ -19,9 +19,11 @@
 | EPUB 检查与质量报告 | 已实现 | `scripts.hermes_books.inspect.inspect_epub` |
 | append-safe / metadata-safe diff | 已实现 | `scripts.hermes_books.diff.compare_for_update` |
 | WebDAV 发布与 pending fallback | 已实现 | `scripts.hermes_books.publish.WebDavPublisher` |
+| Pending 候选列出/批准/拒绝 | 已实现 | `scripts.hermes_books.pending` |
 | 元数据 evidence/decision 框架 | 已实现 | `scripts.hermes_books.metadata` |
 | OPF metadata 写入 | 已实现 | `scripts.hermes_books.opf_metadata.apply_metadata_to_epub` |
 | 封面候选自动采用 | 已实现 | `scripts.hermes_books.assets` |
+| 正文清洗成本规划报告 | 已实现 | `scripts.hermes_books.cleaning` |
 | 真实网络元数据搜索 provider | 规划 | 待实现 |
 | LLM reasoner | 规划 | 待实现 |
 | KOReader sidecar migration | 暂缓 | 待单独设计 |
@@ -110,6 +112,71 @@
 }
 ```
 
+#### `pending_updates`
+
+封装 `scripts.hermes_books.pending.list_pending_reports()`。
+
+输入：
+
+```json
+{ "runs_root": "runs" }
+```
+
+输出：
+
+```json
+[
+  {
+    "report_path": "runs/.../reports/publish-report.json",
+    "pending_path": "/books/.pending/Book - Author/...",
+    "candidate_hash": "..."
+  }
+]
+```
+
+#### `approve_pending_update`
+
+封装 `approve_pending_report()`。必须显式传入 `candidate_hash` 作为确认值。
+
+输入：
+
+```json
+{
+  "report_path": "runs/.../reports/publish-report.json",
+  "confirm_hash": "...",
+  "config_path": "config/hermes-books.yaml"
+}
+```
+
+输出：
+
+```json
+{
+  "status": "approved",
+  "path": "/books/Book - Author.epub",
+  "candidate_hash": "..."
+}
+```
+
+#### `text_cleaning_plan`
+
+封装 `CleaningPlanner`。当前只返回成本规划和 findings，不修改 EPUB。
+
+输入：
+
+```json
+{
+  "epub_path": "D:\\Books\\book.epub",
+  "config_path": "config/hermes-books.yaml"
+}
+```
+
+输出应包含：
+
+- `status`: `planned`、`reported` 或 `skipped`。
+- `cost_plan`。
+- `findings`。
+
 ### `metadata-enricher`
 
 第二优先级。它不直接写 EPUB，只负责 evidence 和 decision。
@@ -159,8 +226,8 @@
 | 工具 | 状态 | 说明 |
 |---|---|---|
 | `list_books` | 规划 | 从 WebDAV `/books` 和 `.pending` 列书 |
-| `get_pending_updates` | 规划 | 展示候选 EPUB、risk report 和 manifest |
-| `approve_pending_update` | 暂缓 | 需要强确认，不能自动覆盖 |
+| `get_pending_updates` | 可封装 | 可基于 `scripts.hermes_books.pending` 展示候选 |
+| `approve_pending_update` | 可封装 | 已有 Python 能力；MCP 层仍必须要求 hash 强确认 |
 | `get_highlights` | 规划 | 从 HighlightSync/WebDAV 导出的标注文件读取 |
 | `get_progress` | 暂缓 | KOReader 本地状态格式和同步方式需单独确认 |
 | `migrate_docsettings` | 暂缓 | 只有 hashdocsettings live overwrite 需要，风险高 |

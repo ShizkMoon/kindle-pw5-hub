@@ -54,6 +54,23 @@ class TxtBuildTests(unittest.TestCase):
                         resolved = posixpath.normpath(posixpath.join(posixpath.dirname(chapter_name), href))
                         self.assertIn(resolved, archive_names)
 
+    def test_txt_build_uses_configured_language(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            txt = root / "novel.txt"
+            txt.write_text("第一章\n本文。\n", encoding="utf-8")
+            job = BookJob.from_input(txt, "テスト", "作者", root / "runs")
+            snapshot = LocalFileSource(job).snapshot()
+            paths = prepare_run_workspace(job)
+
+            draft = build_draft_from_txt(job, snapshot.raw_path, paths.draft_dir, language="ja")
+
+            book = epub.read_epub(str(draft))
+            self.assertEqual(book.get_metadata("DC", "language")[0][0], "ja")
+            with zipfile.ZipFile(draft) as archive:
+                chapter = archive.read("EPUB/chapters/ch0001.xhtml").decode("utf-8")
+            self.assertIn('xml:lang="ja"', chapter)
+
     def test_epub_input_normalization_injects_hermes_stylesheet(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

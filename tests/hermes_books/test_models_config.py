@@ -8,6 +8,7 @@ from scripts.hermes_books.config import (
     HermesConfig,
     KOReaderMetadataLocation,
     MetadataEnrichmentMode,
+    TextCleaningMode,
 )
 from scripts.hermes_books.models import (
     AssetMode,
@@ -92,6 +93,36 @@ class ModelsConfigTests(unittest.TestCase):
         self.assertFalse(cfg.metadata_enrichment.require_evidence_url)
         self.assertFalse(cfg.metadata_enrichment.write_cover)
         self.assertEqual(cfg.koreader.metadata_location, KOReaderMetadataLocation.HASHDOCSETTINGS)
+
+    def test_rejects_non_block_hashdocsettings_policy(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg_path = Path(td) / "hermes-books.yaml"
+            cfg_path.write_text(
+                "koreader:\n"
+                "  metadata_location: \"hashdocsettings\"\n"
+                "  hashdocsettings_policy: \"keep\"\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(ValueError):
+                HermesConfig.load(cfg_path)
+
+    def test_loads_text_cleaning_config(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg_path = Path(td) / "hermes-books.yaml"
+            cfg_path.write_text(
+                "text_cleaning:\n"
+                "  mode: \"off\"\n"
+                "  max_input_chars: 50000\n"
+                "  max_estimated_cost_cny: 0.25\n",
+                encoding="utf-8",
+            )
+
+            cfg = HermesConfig.load(cfg_path)
+
+        self.assertEqual(cfg.text_cleaning.mode, TextCleaningMode.OFF)
+        self.assertEqual(cfg.text_cleaning.max_input_chars, 50000)
+        self.assertEqual(cfg.text_cleaning.max_estimated_cost_cny, 0.25)
 
 
 if __name__ == "__main__":

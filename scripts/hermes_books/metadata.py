@@ -86,12 +86,21 @@ class MetadataEnricher:
         evidence_by_id = {item.id: item for item in evidence}
         applied: list[MetadataDecision] = []
         reported: list[MetadataDecision] = []
-        conflicts = list(resolution.conflicts)
+        conflicts: list[MetadataDecision] = []
+
+        for decision in resolution.conflicts:
+            if self._blocks_publication(decision):
+                conflicts.append(decision)
+            else:
+                reported.append(decision)
 
         for decision in resolution.decisions:
             action = decision.action.lower()
             if action == "block":
-                conflicts.append(decision)
+                if self._blocks_publication(decision):
+                    conflicts.append(decision)
+                else:
+                    reported.append(decision)
                 continue
             if not self._can_apply(decision, evidence_by_id):
                 reported.append(decision)
@@ -144,7 +153,29 @@ class MetadataEnricher:
                 evidence = evidence_by_id.get(evidence_id)
                 if evidence is None or not evidence.url:
                     return False
+        if not self.config.allow_single_source_fields:
+            sources = {
+                evidence.source
+                for evidence_id in decision.evidence_ids
+                if (evidence := evidence_by_id.get(evidence_id)) is not None
+            }
+            if len(sources) < 2:
+                return False
         return True
+
+    def _blocks_publication(self, decision: MetadataDecision) -> bool:
+        if self.config.block_on_conflicting_identity:
+            return True
+        return decision.field not in {
+            "identity",
+            "title",
+            "author",
+            "authors",
+            "series",
+            "volume",
+            "isbn",
+            "opf_identifier",
+        }
 
 
 def write_metadata_reports(report: MetadataReport, reports_dir: Path) -> None:

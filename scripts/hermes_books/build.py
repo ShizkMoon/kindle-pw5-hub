@@ -52,7 +52,7 @@ def _chapter_file(index: int) -> str:
     return f"chapters/ch{index:04d}.xhtml"
 
 
-def build_draft_from_txt(job: BookJob, raw_txt_path: Path, draft_dir: Path) -> Path:
+def build_draft_from_txt(job: BookJob, raw_txt_path: Path, draft_dir: Path, language: str = "zh") -> Path:
     text = read_text(str(raw_txt_path))
     chapters = detect_chapters(text)
     chapters = [ch for ch in chapters if any(line.strip() for line in ch["content_lines"])]
@@ -64,7 +64,7 @@ def build_draft_from_txt(job: BookJob, raw_txt_path: Path, draft_dir: Path) -> P
     book = epub.EpubBook()
     book.set_identifier(_stable_identifier(job))
     book.set_title(job.title)
-    book.set_language("zh")
+    book.set_language(language)
     book.add_author(job.author)
 
     css_item = epub.EpubItem(
@@ -84,11 +84,11 @@ def build_draft_from_txt(job: BookJob, raw_txt_path: Path, draft_dir: Path) -> P
             stripped = line.strip()
             if stripped:
                 body.append(f'<p id="p{para_idx:04d}">{html.escape(stripped)}</p>')
-        chapter = epub.EpubHtml(title=title, file_name=_chapter_file(idx), lang="zh")
+        chapter = epub.EpubHtml(title=title, file_name=_chapter_file(idx), lang=language)
         chapter.content = (
             "<?xml version='1.0' encoding='utf-8'?>\n"
             "<!DOCTYPE html>\n"
-            "<html xmlns='http://www.w3.org/1999/xhtml' xml:lang='zh'>"
+            f"<html xmlns='http://www.w3.org/1999/xhtml' xml:lang=\"{html.escape(language, quote=True)}\">"
             "<head><title>{}</title><link rel='stylesheet' type='text/css' href='../styles/standard.css'/></head>"
             "<body>{}</body></html>"
         ).format(html.escape(title), "\n".join(body)).encode("utf-8")

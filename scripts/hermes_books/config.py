@@ -20,6 +20,11 @@ class KOReaderMetadataLocation(str, Enum):
     HASHDOCSETTINGS = "hashdocsettings"
 
 
+class TextCleaningMode(str, Enum):
+    OFF = "off"
+    REPORT_ONLY = "report-only"
+
+
 @dataclass(frozen=True)
 class WebDavConfig:
     base_url: str = ""
@@ -76,6 +81,19 @@ class KOReaderConfig:
 
 
 @dataclass(frozen=True)
+class TextCleaningConfig:
+    mode: TextCleaningMode = TextCleaningMode.REPORT_ONLY
+    max_input_chars: int = 120000
+    chars_per_token: float = 2.0
+    max_estimated_cost_cny: float = 1.0
+    light_model_cny_per_1k_tokens: float = 0.002
+    selected_route: str = "rules-first-report-only"
+    escalation_route: str = "manual-gpt-5.5-review"
+    long_context_route: str = "manual-deepseek-long-context"
+    enable_model_calls: bool = False
+
+
+@dataclass(frozen=True)
 class HermesConfig:
     webdav: WebDavConfig = WebDavConfig()
     pipeline: PipelineConfig = PipelineConfig()
@@ -83,6 +101,7 @@ class HermesConfig:
     asset_enrichment: AssetEnrichmentConfig = AssetEnrichmentConfig()
     metadata_enrichment: MetadataEnrichmentConfig = MetadataEnrichmentConfig()
     koreader: KOReaderConfig = KOReaderConfig()
+    text_cleaning: TextCleaningConfig = TextCleaningConfig()
 
     @classmethod
     def load(cls, path: Path | None) -> "HermesConfig":
@@ -112,7 +131,23 @@ class HermesConfig:
         }
         koreader_data["metadata_location"] = KOReaderMetadataLocation(koreader_data["metadata_location"])
         koreader = KOReaderConfig(**koreader_data)
-        return cls(webdav, pipeline, update_policy, asset_enrichment, metadata_enrichment, koreader)
+        if koreader.hashdocsettings_policy != "block":
+            raise ValueError("koreader.hashdocsettings_policy currently only supports 'block'")
+        cleaning_data: dict[str, Any] = {
+            **TextCleaningConfig().__dict__,
+            **data.get("text_cleaning", {}),
+        }
+        cleaning_data["mode"] = TextCleaningMode(cleaning_data["mode"])
+        text_cleaning = TextCleaningConfig(**cleaning_data)
+        return cls(
+            webdav,
+            pipeline,
+            update_policy,
+            asset_enrichment,
+            metadata_enrichment,
+            koreader,
+            text_cleaning,
+        )
 
 
 def _parse_scalar(value: str) -> Any:

@@ -40,3 +40,14 @@ koreader:
   metadata_location: "book_folder"
   aggressive_metadata_requires_stable_path: true
   hashdocsettings_policy: "block"
+
+text_cleaning:
+  mode: "report-only"
+  max_input_chars: 120000
+  chars_per_token: 2.0
+  max_estimated_cost_cny: 1.0
+  light_model_cny_per_1k_tokens: 0.002
+  selected_route: "rules-first-report-only"
+  escalation_route: "manual-gpt-5.5-review"
+  long_context_route: "manual-deepseek-long-context"
+  enable_model_calls: false

@@ -2,7 +2,7 @@
 
 Kindle PW5 + KOReader 的个人书务工作流。这个仓库现在的主线不是“Kindle 折腾指南”，而是 Hermes 书籍入库管线：本地 TXT/EPUB 进入统一处理流程，生成面向 KOReader 的 EPUB，检查章节和资源稳定性，再通过 WebDAV 发布到阅读端。
 
-当前实现已经覆盖本地 intake、EPUB 检查、元数据增强、WebDAV 发布、风险更新 pending 和 KOReader 进度保护。大模型搜索、章节级清洗、缺章补全、UMD/JAR 支持还没有接入主流程，文档里会把这些明确标为后续方向。
+当前实现已经覆盖本地 intake、EPUB 检查、元数据增强、WebDAV 发布、风险更新 pending、pending 人工处理、清洗成本规划报告和 KOReader 进度保护。真实大模型搜索、章节级自动改写、缺章补全、UMD/JAR 支持还没有接入主流程，文档里会把这些明确标为后续方向。
 
 ## 当前能力
 
@@ -13,8 +13,10 @@ Hermes intake 可以做这些事：
 - TXT 自动生成 EPUB 初稿；EPUB 会被规范化并注入 Hermes 样式资源。
 - 检查章节、图片、CSS、OPF identifier、封面状态和 reader-facing 指纹。
 - 生成 `quality-report.md`、`asset-report.json`、`epubcheck.json`、`manifest.json`、`publish-report.json`。
+- 生成 `cleaning-report.json` / `cleaning-report.md`，先做正文清洗成本规划和报告占位，不改正文。
 - 通过 provider/reasoner 注入元数据证据和裁决，自动写入 OPF metadata 与封面。
 - 发布到 WebDAV `/books`，风险更新进入 `/books/.pending/`，不直接覆盖旧书。
+- 通过 `scripts.hermes_books.pending` 查看、批准或拒绝 `.pending/` 候选。
 - 在 KOReader `hashdocsettings` 模式下阻断旧书 live overwrite，避免 EPUB 内容 hash 改变后丢失进度关联。
 
 目前不做：
@@ -55,7 +57,7 @@ runs/<job-id>/reports/publish-report.json
 runs/<job-id>/reports/manifest.json
 ```
 
-如果启用了元数据增强并且流程进入 metadata 阶段，还会有 `metadata-report.json` 和 `metadata-report.md`。已有远端旧书、远端状态异常或更新被阻断时，会额外生成 `update-diff.md`。
+成功进入 EPUB 检查后的运行还会有 `metadata-report.json`、`metadata-report.md`、`cleaning-report.json` 和 `cleaning-report.md`。如果源文件在检查前失败，Hermes 也会写出 skipped metadata/cleaning 报告，方便排障。已有远端旧书、远端状态异常或更新被阻断时，会额外生成 `update-diff.md`。
 
 `publish-report.json` 的 `status` 是最直接的结果：
 
@@ -65,6 +67,29 @@ runs/<job-id>/reports/manifest.json
 | `pending` | 候选书已放入 `.pending/`，旧书没有被覆盖 |
 | `pending-local` | 远端 pending 上传失败，本地 reports 保留原因 |
 | `blocked` | 质量门禁阻断发布 |
+
+## 处理 Pending
+
+先列出本地 runs 里记录过的远端 pending 候选：
+
+```powershell
+python -m scripts.hermes_books.pending list --runs-root runs
+```
+
+查看某次候选：
+
+```powershell
+python -m scripts.hermes_books.pending show --report runs\<job-id>\reports\publish-report.json --config config/hermes-books.yaml
+```
+
+确认批准或拒绝时必须带 `publish-report.json` 里的 `candidate_hash`：
+
+```powershell
+python -m scripts.hermes_books.pending approve --report runs\<job-id>\reports\publish-report.json --config config/hermes-books.yaml --confirm "<candidate_hash>"
+python -m scripts.hermes_books.pending reject --report runs\<job-id>\reports\publish-report.json --config config/hermes-books.yaml --confirm "<candidate_hash>"
+```
+
+`approve` 会先备份旧 `/books/<slug>.epub` 和 `.hermes.json`，再把候选提升到 live 路径。`reject` 只删除 `.pending/` 下的候选文件。
 
 ## 配置重点
 
@@ -85,15 +110,25 @@ pipeline:
 metadata_enrichment:
   mode: "aggressive"      # off | report-only | aggressive
   require_evidence_url: true
+  allow_single_source_fields: true
+  block_on_conflicting_identity: true
   write_epub_metadata: true
   write_cover: true
 
 koreader:
   metadata_location: "book_folder"   # book_folder | docsettings | hashdocsettings
   hashdocsettings_policy: "block"
+
+text_cleaning:
+  mode: "report-only"     # off | report-only
+  max_input_chars: 120000
+  max_estimated_cost_cny: 1.0
+  enable_model_calls: false
 ```
 
 建议 KOReader 端优先使用 `book_folder`。如果你已经启用了 `hashdocsettings`，Hermes 第一版会把旧书元数据改写放入 pending，不做 live overwrite。
+
+`pipeline.keep_runs`、`pipeline.output_profile`、`metadata_enrichment.preserve_target_path`、`metadata_enrichment.preserve_canonical_id` 目前是保留配置；它们记录目标策略，不伪装成已经改变行为的开关。
 
 ## 元数据增强
 
@@ -120,6 +155,23 @@ koreader:
 - 封面资源和 OPF cover metadata
 
 Hermes 会保留 OPF 主 identifier、WebDAV 文件名和 `canonical_id`。写入后会重新 inspect EPUB；如果章节 href、item id、正文 fingerprint、结构 fingerprint 或资源 fingerprint 漂移，旧书发布会被阻断。
+
+真实网络搜索 provider 和 LLM reasoner 还没有默认上线。当前主流程只使用调用方显式注入的 provider/reasoner。
+
+## 正文清洗报告
+
+`text_cleaning` 当前是 report-only 框架。默认不会调用模型，也不会修改正文；它会根据 EPUB 检查得到的章节文字量估算输入规模、预算和模型路由。
+
+成本规划遵循 ai-workstation 思路：
+
+| 路由 | 用途 |
+|---|---|
+| 规则/EPUB inspect | 免费前置过滤 |
+| MiniMax/M3 或轻量模型 | 后续接入时用于广告、模板、章节异常分类 |
+| DeepSeek 长上下文 | 人工触发的长篇结构分析 |
+| GPT-5.5 级别模型 | 高价值最终复核，需显式批准 |
+
+后续如果接入模型，模型也只应输出结构化 findings/patch 候选；实际删除广告、合并段落或移动章节必须由 Hermes 确定性代码执行并重新检查。
 
 ## 发布策略
 
@@ -153,9 +205,10 @@ Hermes 把远端 `/books/书名 - 作者.epub` 当作阅读母本。发布前会
 常用验证命令：
 
 ```powershell
-python -m unittest tests.hermes_books.test_assets tests.hermes_books.test_build_txt tests.hermes_books.test_diff tests.hermes_books.test_inspect tests.hermes_books.test_intake tests.hermes_books.test_metadata tests.hermes_books.test_models_config tests.hermes_books.test_opf_metadata tests.hermes_books.test_publish tests.hermes_books.test_sources
+python -m unittest tests.hermes_books.test_assets tests.hermes_books.test_build_txt tests.hermes_books.test_cleaning tests.hermes_books.test_diff tests.hermes_books.test_inspect tests.hermes_books.test_intake tests.hermes_books.test_metadata tests.hermes_books.test_models_config tests.hermes_books.test_opf_metadata tests.hermes_books.test_pending tests.hermes_books.test_publish tests.hermes_books.test_sources
 python -m compileall scripts\hermes_books tests\hermes_books
 python -m scripts.hermes_books.intake --help
+python -m scripts.hermes_books.pending --help
 git diff --check HEAD
 ```
 
