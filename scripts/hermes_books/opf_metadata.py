@@ -12,6 +12,8 @@ from .metadata import MetadataDecision, MetadataReport
 
 DC_NS = "http://purl.org/dc/elements/1.1/"
 OPF_NS = "http://www.idpf.org/2007/opf"
+HERMES_META_PREFIX = "hermes"
+HERMES_META_IRI = "https://github.com/hermes/kindle-pw5-hub/metadata#"
 
 
 def _opf_tag(namespace: str, name: str) -> str:
@@ -71,6 +73,14 @@ def _decisions_by_field(report: MetadataReport) -> dict[str, MetadataDecision]:
     return {decision.field: decision for decision in report.applied_decisions}
 
 
+def _ensure_property_prefix(opf_root: ElementTree.Element, prefix: str, iri: str) -> None:
+    raw_prefix = opf_root.attrib.get("prefix", "").strip()
+    if f"{prefix}:" in raw_prefix:
+        return
+    addition = f"{prefix}: {iri}"
+    opf_root.set("prefix", f"{raw_prefix} {addition}".strip())
+
+
 def _ensure_child(root: ElementTree.Element, tag: str) -> ElementTree.Element:
     child = root.find(tag)
     if child is None:
@@ -127,6 +137,9 @@ def _unique_cover_href(opf_path: str, entries: dict[str, bytes], requested_href:
 def _write_opf_metadata(
     opf_root: ElementTree.Element,
     report: MetadataReport,
+    *,
+    write_description: bool = True,
+    write_subjects: bool = True,
 ) -> None:
     namespace = opf_root.tag[1:].split("}", 1)[0] if opf_root.tag.startswith("{") else ""
     if namespace:
@@ -149,11 +162,11 @@ def _write_opf_metadata(
         _remove_children(metadata, [_dc_tag("publisher")])
         for value in _normalise_values(decisions["publisher"].new_value):
             _append_dc(metadata, "publisher", value)
-    if "description" in decisions:
+    if write_description and "description" in decisions:
         _remove_children(metadata, [_dc_tag("description")])
         for value in _normalise_values(decisions["description"].new_value):
             _append_dc(metadata, "description", value)
-    if "subjects" in decisions:
+    if write_subjects and "subjects" in decisions:
         _remove_children(metadata, [_dc_tag("subject")])
         for value in _normalise_values(decisions["subjects"].new_value):
             _append_dc(metadata, "subject", value)
@@ -172,6 +185,7 @@ def _write_opf_metadata(
         "published_date",
     ]:
         if field in decisions:
+            _ensure_property_prefix(opf_root, HERMES_META_PREFIX, HERMES_META_IRI)
             _set_meta(metadata, namespace, f"hermes:{field}", decisions[field].new_value)
 
 
@@ -218,6 +232,10 @@ def apply_metadata_to_epub(
     report: MetadataReport,
     cover_bytes: bytes | None = None,
     cover_media_type: str = "image/jpeg",
+    *,
+    write_cover: bool = True,
+    write_description: bool = True,
+    write_subjects: bool = True,
 ) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(epub_path, "r") as source:
@@ -226,10 +244,19 @@ def apply_metadata_to_epub(
 
     opf_path = _opf_root_path(entries)
     opf_root = ElementTree.fromstring(entries[opf_path])
-    _write_opf_metadata(opf_root, report)
+    _write_opf_metadata(
+        opf_root,
+        report,
+        write_description=write_description,
+        write_subjects=write_subjects,
+    )
 
     cover_path = None
-    if cover_bytes is not None and any(decision.field == "cover" for decision in report.applied_decisions):
+    if (
+        write_cover
+        and cover_bytes is not None
+        and any(decision.field == "cover" for decision in report.applied_decisions)
+    ):
         cover_path = _write_cover(opf_root, opf_path, entries, cover_bytes, cover_media_type)
 
     entries[opf_path] = ElementTree.tostring(opf_root, encoding="utf-8", xml_declaration=True)

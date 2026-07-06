@@ -12,6 +12,8 @@ from scripts.hermes_books.config import (
     HermesConfig,
     KOReaderConfig,
     KOReaderMetadataLocation,
+    MetadataEnrichmentConfig,
+    MetadataEnrichmentMode,
     PipelineConfig,
 )
 from scripts.hermes_books.inspect import inspect_epub
@@ -139,6 +141,104 @@ class IntakeTests(unittest.TestCase):
             self.assertIn("标准书名", opf_text)
             self.assertIn("画师", opf_text)
             self.assertIn("9780000000000", opf_text)
+
+    def test_metadata_enrichment_off_does_not_call_provider(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source_epub = make_epub(root / "source.epub", title="Book")
+            config = HermesConfig(
+                asset_enrichment=AssetEnrichmentConfig(mode=AssetMode.OFF),
+                pipeline=PipelineConfig(require_epubcheck=False),
+                metadata_enrichment=MetadataEnrichmentConfig(mode=MetadataEnrichmentMode.OFF),
+            )
+
+            class CountingProvider:
+                called = False
+
+                def search(self, _clues):
+                    self.called = True
+                    return []
+
+            class CountingReasoner:
+                called = False
+
+                def resolve(self, _clues, _evidence):
+                    self.called = True
+                    return MetadataResolution()
+
+            provider = CountingProvider()
+            reasoner = CountingReasoner()
+
+            result = run_intake(
+                input_path=source_epub,
+                title="Book",
+                author="Author",
+                runs_root=root / "runs",
+                config=config,
+                webdav_client=LocalWebDavClient(root / "webdav"),
+                metadata_provider=provider,
+                metadata_reasoner=reasoner,
+            )
+
+            metadata_json = json.loads((result.reports_dir / "metadata-report.json").read_text(encoding="utf-8"))
+            self.assertEqual(result.publish_report["status"], "published")
+            self.assertEqual(metadata_json["status"], "skipped")
+            self.assertFalse(provider.called)
+            self.assertFalse(reasoner.called)
+
+    def test_metadata_cover_fetcher_not_called_when_write_cover_disabled(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source_epub = make_epub(root / "source.epub", title="Book")
+            config = HermesConfig(
+                asset_enrichment=AssetEnrichmentConfig(mode=AssetMode.OFF),
+                pipeline=PipelineConfig(require_epubcheck=False),
+                metadata_enrichment=MetadataEnrichmentConfig(write_cover=False),
+            )
+
+            class CoverReasoner:
+                def resolve(self, _clues, _evidence):
+                    return MetadataResolution(
+                        decisions=[
+                            MetadataDecision("title", "Book", "标准书名", "apply", 0.96, ["store-1"], "title match"),
+                            MetadataDecision(
+                                "cover",
+                                "",
+                                "https://example.test/cover.jpg",
+                                "apply",
+                                0.96,
+                                ["store-1"],
+                                "cover match",
+                            ),
+                        ]
+                    )
+
+            fetcher_called = False
+
+            def cover_fetcher(_report):
+                nonlocal fetcher_called
+                fetcher_called = True
+                return b"new cover bytes"
+
+            result = run_intake(
+                input_path=source_epub,
+                title="Book",
+                author="Author",
+                runs_root=root / "runs",
+                config=config,
+                webdav_client=LocalWebDavClient(root / "webdav"),
+                metadata_provider=StaticMetadataProvider(),
+                metadata_reasoner=CoverReasoner(),
+                metadata_cover_fetcher=cover_fetcher,
+            )
+
+            self.assertEqual(result.manifest.metadata_report["status"], "applied")
+            self.assertFalse(fetcher_called)
+            with zipfile.ZipFile(result.output_epub) as archive:
+                names = archive.namelist()
+                opf_text = archive.read("EPUB/content.opf").decode("utf-8")
+            self.assertIn("标准书名", opf_text)
+            self.assertNotIn("hermes-metadata-cover", "\n".join(names))
 
     def test_existing_book_aggressive_metadata_book_folder_allows_safe_metadata_publish(self):
         with tempfile.TemporaryDirectory() as td:

@@ -69,6 +69,44 @@ class OpfMetadataTests(unittest.TestCase):
             self.assertIn("画师", opf_text)
             self.assertIn("volume", opf_text)
 
+    def test_apply_metadata_respects_disabled_description_and_subjects(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = make_epub(root / "source.epub", title="旧书名")
+            report = _report(
+                [
+                    MetadataDecision("description", "", "故事简介", "apply", 0.95, ["store-1"], "description match"),
+                    MetadataDecision("subjects", [], ["轻小说"], "apply", 0.95, ["store-1"], "subject match"),
+                ]
+            )
+
+            output = apply_metadata_to_epub(
+                source,
+                root / "out.epub",
+                report,
+                write_description=False,
+                write_subjects=False,
+            )
+            opf = _opf_root(output)
+
+            self.assertNotIn("故事简介", _texts(opf, "description"))
+            self.assertNotIn("轻小说", _texts(opf, "subject"))
+
+    def test_apply_metadata_declares_hermes_prefix_for_custom_meta(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = make_epub(root / "source.epub", title="旧书名")
+            report = _report(
+                [
+                    MetadataDecision("series", "", "系列名", "apply", 0.95, ["store-1"], "series match"),
+                ]
+            )
+
+            output = apply_metadata_to_epub(source, root / "out.epub", report)
+            opf = _opf_root(output)
+
+            self.assertIn("hermes:", opf.attrib.get("prefix", ""))
+
     def test_apply_metadata_cover_preserves_existing_cover_and_uses_unique_path(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

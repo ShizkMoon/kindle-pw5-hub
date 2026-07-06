@@ -129,6 +129,12 @@ class MetadataEnricher:
             return False
         if decision.action.lower() != "apply":
             return False
+        if decision.field == "cover" and not self.config.write_cover:
+            return False
+        if decision.field == "description" and not self.config.write_description:
+            return False
+        if decision.field == "subjects" and not self.config.write_subjects:
+            return False
         if decision.confidence < self.config.auto_apply_min_confidence:
             return False
         if self.config.require_evidence_url:

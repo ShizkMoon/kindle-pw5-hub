@@ -13,7 +13,7 @@ from typing import Any
 
 from .assets import AssetEnricher, AssetFetcher, AssetProvider, apply_auto_adopted_assets
 from .build import build_draft_from_txt, normalize_existing_epub
-from .config import HermesConfig
+from .config import HermesConfig, MetadataEnrichmentMode
 from .diff import compare_for_update
 from .inspect import inspect_epub, write_quality_report
 from .metadata import (
@@ -176,6 +176,10 @@ def _run_metadata_enrichment(
     metadata_cover_fetcher: Callable[[Any], bytes | None] | None,
 ) -> tuple[Path, Any, dict[str, Any]]:
     enricher = MetadataEnricher(config.metadata_enrichment)
+    if config.metadata_enrichment.mode == MetadataEnrichmentMode.OFF:
+        report = enricher.skipped("metadata enrichment disabled")
+        write_metadata_reports(report, reports_dir)
+        return output_epub, inspection, report.to_dict()
     if metadata_provider is None or metadata_reasoner is None:
         report = enricher.skipped("metadata provider or reasoner not configured")
         write_metadata_reports(report, reports_dir)
@@ -202,7 +206,13 @@ def _run_metadata_enrichment(
 
     if report.applied_decisions and config.metadata_enrichment.write_epub_metadata:
         try:
-            cover_bytes = metadata_cover_fetcher(report) if metadata_cover_fetcher is not None else None
+            cover_bytes = None
+            if (
+                config.metadata_enrichment.write_cover
+                and any(decision.field == "cover" for decision in report.applied_decisions)
+                and metadata_cover_fetcher is not None
+            ):
+                cover_bytes = metadata_cover_fetcher(report)
             metadata_output = output_epub.with_name(f"{output_epub.stem}.metadata.epub")
             before_inspection = inspection
             output_epub = apply_metadata_to_epub(
@@ -210,6 +220,9 @@ def _run_metadata_enrichment(
                 metadata_output,
                 report,
                 cover_bytes=cover_bytes,
+                write_cover=config.metadata_enrichment.write_cover,
+                write_description=config.metadata_enrichment.write_description,
+                write_subjects=config.metadata_enrichment.write_subjects,
             )
             inspection = inspect_epub(output_epub)
             structure_stable = _reader_structure_stable(before_inspection, inspection)
