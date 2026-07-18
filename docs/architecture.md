@@ -2,6 +2,25 @@
 
 本文记录当前 Kindle PW5 Hub 的实际架构。主线是 Hermes book intake：本地书籍文件进入统一处理管线，生成适合 KOReader 的 EPUB，通过 WebDAV 发布，并尽量保护旧书的阅读进度、书签和标注关联。
 
+## 与 AI 工作站的分层
+
+这里的 `scripts/hermes_books` 是本仓库已经实现的本地书务代码，不等于云端 Hermes 已经能够远程托管 Windows。重装后的目标链路是：
+
+```text
+手机请求 / 文件
+  -> 云端 Hermes：判断时效、电脑在线状态与队列
+  -> Tailscale + SSH：只传任务和状态
+  -> 本地 Codex：读取仓库、配置、旧书状态与报告
+  -> 本地 Agent 运行层：调用 scripts/hermes_books 和确定性检查
+  -> Windows 本地文件 / WebDAV
+  -> KOReader 阅读端
+  -> 结果按 received / queued / published / pending / blocked / verified 回报
+```
+
+Windows 承担数据面，因为源文件、运行报告、WebDAV 凭据和阅读端上下文都在本地；Hermes 只承担编排和简短状态；Codex 承担理解、维护与故障解释。SSH 不是权限来源，自动托管也不改变旧书覆盖、正文修改和标注保护规则。
+
+当前可验证的是下面的 Python 管线与测试。Hermes → SSH → 本地 Codex 的远程链路、每日标注回流和真实模型 provider 仍是 planned，部署后必须分别验收。
+
 ## 边界
 
 当前实现聚焦三件事：
