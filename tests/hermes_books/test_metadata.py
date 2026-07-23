@@ -126,7 +126,9 @@ class MetadataTests(unittest.TestCase):
 
             raw = json.loads((reports_dir / "metadata-report.json").read_text(encoding="utf-8"))
             self.assertEqual(raw["status"], "applied")
-            self.assertIn("已自动补全", (reports_dir / "metadata-report.md").read_text(encoding="utf-8"))
+            markdown = (reports_dir / "metadata-report.md").read_text(encoding="utf-8")
+            self.assertIn("已自动补全", markdown)
+            self.assertIn("https://example.test/books/1", markdown)
 
 
 if __name__ == "__main__":

@@ -273,6 +273,51 @@ class IntakeTests(unittest.TestCase):
                 opf_text = archive.read("EPUB/content.opf").decode("utf-8")
             self.assertIn("标准书名", opf_text)
 
+    def test_metadata_cover_without_fetcher_is_reported_not_falsely_applied(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source_epub = make_epub(root / "source.epub", title="Book")
+
+            class CoverReasoner:
+                def resolve(self, _clues, _evidence):
+                    return MetadataResolution(
+                        decisions=[
+                            MetadataDecision(
+                                "title", "Book", "标准书名", "apply", 0.96, ["store-1"], "match"
+                            ),
+                            MetadataDecision(
+                                "cover",
+                                "",
+                                "https://example.test/cover.jpg",
+                                "apply",
+                                0.96,
+                                ["store-1"],
+                                "match",
+                            ),
+                        ]
+                    )
+
+            result = run_intake(
+                source_epub,
+                "Book",
+                "Author",
+                root / "runs",
+                no_network_config(),
+                webdav_client=LocalWebDavClient(root / "webdav"),
+                metadata_provider=StaticMetadataProvider(),
+                metadata_reasoner=CoverReasoner(),
+            )
+
+            applied_fields = {
+                decision["field"] for decision in result.manifest.metadata_report["applied_decisions"]
+            }
+            reported_fields = {
+                decision["field"] for decision in result.manifest.metadata_report["reported_decisions"]
+            }
+            self.assertIn("title", applied_fields)
+            self.assertNotIn("cover", applied_fields)
+            self.assertIn("cover", reported_fields)
+
     def test_existing_book_aggressive_metadata_hashdocsettings_goes_pending(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

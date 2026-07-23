@@ -1,5 +1,4 @@
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +8,7 @@ from scripts.hermes_books.config import (
     KOReaderMetadataLocation,
     MetadataEnrichmentMode,
     TextCleaningMode,
+    TypographyMode,
 )
 from scripts.hermes_books.models import (
     AssetMode,
@@ -54,7 +54,7 @@ class ModelsConfigTests(unittest.TestCase):
         loaded = BookManifest.from_json(raw)
         self.assertEqual(loaded.canonical_id, "book::author")
         self.assertEqual(loaded.update_decision, UpdateDecision.SAFE_APPEND)
-        self.assertEqual(json.loads(raw)["schema_version"], 1)
+        self.assertEqual(json.loads(raw)["schema_version"], 2)
 
     def test_config_defaults_and_yaml_override(self):
         with tempfile.TemporaryDirectory() as td:
@@ -71,6 +71,7 @@ class ModelsConfigTests(unittest.TestCase):
         self.assertEqual(cfg.webdav.books_path, "/books")
         self.assertEqual(cfg.asset_enrichment.mode, AssetMode.AGGRESSIVE)
         self.assertEqual(cfg.update_policy.chapter_fingerprint_threshold, 0.98)
+        self.assertEqual(cfg.typography.mode, TypographyMode.NORMALIZE)
 
     def test_loads_metadata_and_koreader_config(self):
         with tempfile.TemporaryDirectory() as td:
@@ -123,6 +124,34 @@ class ModelsConfigTests(unittest.TestCase):
         self.assertEqual(cfg.text_cleaning.mode, TextCleaningMode.OFF)
         self.assertEqual(cfg.text_cleaning.max_input_chars, 50000)
         self.assertEqual(cfg.text_cleaning.max_estimated_cost_cny, 0.25)
+
+    def test_loads_typography_and_online_enrichment_config(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg_path = Path(td) / "hermes-books.yaml"
+            cfg_path.write_text(
+                "typography:\n"
+                "  mode: audit-only\n"
+                "  block_on_failure: false\n"
+                "online_enrichment:\n"
+                "  enabled: true\n"
+                "  sources: google-books\n"
+                "  min_identity_score: 0.9\n",
+                encoding="utf-8",
+            )
+
+            cfg = HermesConfig.load(cfg_path)
+
+        self.assertEqual(cfg.typography.mode, TypographyMode.AUDIT_ONLY)
+        self.assertFalse(cfg.typography.block_on_failure)
+        self.assertTrue(cfg.online_enrichment.enabled)
+        self.assertEqual(cfg.online_enrichment.sources, "google-books")
+        self.assertEqual(cfg.online_enrichment.min_identity_score, 0.9)
+
+    def test_example_config_is_loadable_with_inline_comments(self):
+        cfg = HermesConfig.load(Path("config/hermes-books.example.yaml"))
+
+        self.assertEqual(cfg.typography.mode, TypographyMode.NORMALIZE)
+        self.assertTrue(cfg.online_enrichment.enabled)
 
 
 if __name__ == "__main__":

@@ -1,8 +1,8 @@
 # Kindle PW5 Hub
 
-Kindle PW5 + KOReader 的个人书务工作流。这个仓库现在的主线不是“Kindle 折腾指南”，而是 Hermes 书籍入库管线：本地 TXT/EPUB 进入统一处理流程，生成面向 KOReader 的 EPUB，检查章节和资源稳定性，再通过 WebDAV 发布到阅读端。
+Kindle PW5 + KOReader 的个人书务工作流。这个仓库现在的主线不是“Kindle 折腾指南”，而是 Hermes EPUB 精制管线：本地 TXT/EPUB 先做确定性的结构与排版优化，再用可追溯的互联网证据补全元数据和封面，最后检查章节与资源稳定性，并通过 WebDAV 发布到阅读端。
 
-当前实现已经覆盖本地 intake、EPUB 检查、元数据增强、WebDAV 发布、风险更新 pending、pending 人工处理、清洗成本规划报告和 KOReader 进度保护。真实大模型搜索、章节级自动改写、缺章补全、UMD/JAR 支持还没有接入主流程，文档里会把这些明确标为后续方向。
+当前实现已经覆盖本地 intake、KOReader 文学排版 profile、px/pt 排版单位规范化、排版审计门禁、Google Books/Open Library 元数据与封面补全、WebDAV 发布、风险更新 pending、清洗成本规划报告和 KOReader 进度保护。真实大模型判断、章节级自动改写、缺章补全、插图自动定位和 UMD/JAR 支持还没有接入主流程，文档里会把这些明确标为后续方向。
 
 ## 在 Agent-native 工作站中的位置
 
@@ -23,12 +23,15 @@ Hermes intake 可以做这些事：
 
 - 接收本地 `.txt` 或 `.epub`。
 - 为每次运行创建 `runs/<job-id>/` 工作区，保存 raw、draft、normalized 和 reports。
-- TXT 自动生成 EPUB 初稿；EPUB 会被规范化并注入 Hermes 样式资源。
+- TXT 自动生成 EPUB 初稿；EPUB 会被规范化、转换固定字号/行高，并注入 Hermes KOReader 文学排版 profile。
+- 生成 `typography-report.json` / `typography-report.md`，审计 profile 覆盖、固定排版单位、嵌入字体和遗留 HTML。
 - 检查章节、图片、CSS、OPF identifier、封面状态和 reader-facing 指纹。
 - 生成 `quality-report.md`、`asset-report.json`、`epubcheck.json`、`manifest.json`、`publish-report.json`。
 - 生成 `cleaning-report.json` / `cleaning-report.md`，先做正文清洗成本规划和报告占位，不改正文。
-- 通过 provider/reasoner 注入元数据证据和裁决，自动写入 OPF metadata 与封面。
+- 可通过 Google Books 和 Open Library 联网获取元数据与封面；原始响应缓存，字段决策保留来源 URL、置信度和 evidence id。
+- 使用确定性共识 reasoner 自动补空字段；已有值冲突和单来源 ISBN 只进入复核，不静默覆盖。
 - 发布到 WebDAV `/books`，风险更新进入 `/books/.pending/`，不直接覆盖旧书。
+- 可用 `--asset-candidates` 导入人工/Agent 筛选的封面和插图候选；插图只生成复核报告，不自动入书。
 - 通过 `scripts.hermes_books.pending` 查看、批准或拒绝 `.pending/` 候选。
 - 在 KOReader `hashdocsettings` 模式下阻断旧书 live overwrite，避免 EPUB 内容 hash 改变后丢失进度关联。
 
@@ -37,6 +40,7 @@ Hermes intake 可以做这些事：
 - 不抓取 UMD/JAR。
 - 不自动补全文本正文或缺章。
 - 不让大模型直接改写正文。
+- 不从搜索结果自动抓取或定位正文插图；插图候选仍需人工核对卷册、章节和来源权利。
 - 不迁移 KOReader 本地 `.sdr` 或 hashdocsettings sidecar。
 - 不依赖 Send to Kindle、Whispersync 或亚马逊云。
 
@@ -62,6 +66,14 @@ python -m scripts.hermes_books.intake "D:\Books\raw.txt" -t "书名" -a "作者"
 python -m scripts.hermes_books.intake "D:\Books\raw.epub" -t "书名" -a "作者" --config config/hermes-books.yaml
 ```
 
+配置未开启联网时，可以对单次运行显式开启；也可以强制离线：
+
+```powershell
+python -m scripts.hermes_books.intake "D:\Books\raw.epub" -t "书名" -a "作者" --online-enrichment
+python -m scripts.hermes_books.intake "D:\Books\raw.epub" -t "书名" -a "作者" --offline
+python -m scripts.hermes_books.intake "D:\Books\raw.epub" -t "书名" -a "作者" --asset-candidates "D:\Books\asset-candidates.json"
+```
+
 正常跑到检查阶段后，重点看这些文件：
 
 ```text
@@ -70,7 +82,7 @@ runs/<job-id>/reports/publish-report.json
 runs/<job-id>/reports/manifest.json
 ```
 
-成功进入 EPUB 检查后的运行还会有 `metadata-report.json`、`metadata-report.md`、`cleaning-report.json` 和 `cleaning-report.md`。如果源文件在检查前失败，Hermes 也会写出 skipped metadata/cleaning 报告，方便排障。已有远端旧书、远端状态异常或更新被阻断时，会额外生成 `update-diff.md`。
+成功进入 EPUB 检查后的运行还会有 `typography-report.json`、`typography-report.md`、`metadata-report.json`、`metadata-report.md`、`cleaning-report.json` 和 `cleaning-report.md`。如果源文件在检查前失败，Hermes 也会写出 skipped 报告，方便排障。已有远端旧书、远端状态异常或更新被阻断时，会额外生成 `update-diff.md`。
 
 `publish-report.json` 的 `status` 是最直接的结果：
 
@@ -120,6 +132,15 @@ pipeline:
   output_profile: "koreader"
   language: "zh"
 
+typography:
+  mode: "normalize"
+  profile: "koreader-literary"
+  normalize_fixed_font_sizes: true
+  normalize_absolute_line_heights: true
+  normalize_inline_styles: true
+  require_profile_link: true
+  block_on_failure: true
+
 metadata_enrichment:
   mode: "aggressive"      # off | report-only | aggressive
   require_evidence_url: true
@@ -127,6 +148,12 @@ metadata_enrichment:
   block_on_conflicting_identity: true
   write_epub_metadata: true
   write_cover: true
+
+online_enrichment:
+  enabled: true
+  sources: "google-books,open-library"
+  cache_ttl_hours: 168
+  min_identity_score: 0.82
 
 koreader:
   metadata_location: "book_folder"   # book_folder | docsettings | hashdocsettings
@@ -143,9 +170,21 @@ text_cleaning:
 
 `pipeline.keep_runs`、`pipeline.output_profile`、`metadata_enrichment.preserve_target_path`、`metadata_enrichment.preserve_canonical_id` 目前是保留配置；它们记录目标策略，不伪装成已经改变行为的开关。
 
+## 排版精制
+
+`typography.mode=normalize` 会在不改正文文字、章节 href、item id 和 OPF 主 identifier 的前提下：
+
+- 把 CSS 和内联 style 中的 px/pt 字号、绝对行高换算为相对 `em`。
+- 为所有可读正文挂接 `koreader-literary` profile。
+- 优化中文小说的缩进、行距、标题、分隔线、图片、表格、ruby 和代码块表现。
+- 保留嵌入字体，但在报告中提示人工检查体积和 KOReader 覆盖行为。
+- 对 profile 缺失或仍残留固定字号的 EPUB 触发排版质量门禁。
+
+排版器只改样式声明，不合并段落、不删除留白、不重写章节正文。`audit-only` 可只检查不改写；`off` 则跳过这一层。
+
 ## 元数据增强
 
-元数据增强由两个可注入接口组成：
+元数据增强仍保留两个可注入接口：
 
 - `MetadataProvider.search(clues)`：返回带 URL、来源、字段事实和置信度的 evidence。
 - `MetadataReasoner.resolve(clues, evidence)`：融合 evidence，输出字段级 `MetadataDecision`。
@@ -169,7 +208,34 @@ text_cleaning:
 
 Hermes 会保留 OPF 主 identifier、WebDAV 文件名和 `canonical_id`。写入后会重新 inspect EPUB；如果章节 href、item id、正文 fingerprint、结构 fingerprint 或资源 fingerprint 漂移，旧书发布会被阻断。
 
-真实网络搜索 provider 和 LLM reasoner 还没有默认上线。当前主流程只使用调用方显式注入的 provider/reasoner。
+当前内置 `OnlineMetadataProvider` 会查询 Google Books 和 Open Library，`DeterministicMetadataReasoner` 按书名/作者匹配度、来源一致性和字段风险做裁决，不依赖大模型。Google Books 在匿名额度受限时可能返回 429；管线会记录错误并继续使用 Open Library，也可通过 `GOOGLE_BOOKS_API_KEY` 提供 API key。
+
+共享响应缓存在 `runs/.online-cache/metadata/`，本次运行的原始证据副本保存在 `runs/<job-id>/evidence-cache/`。封面只接受受信来源的 HTTPS 地址，并在写入前验证体积和图片文件签名。零售站、出版社页面及插图搜索尚未加入自动 provider。
+
+## 插图候选复核
+
+当前可以把人工或 Agent 从官方页面筛选出的候选传给 `--asset-candidates`。模板见 [config/asset-candidates.example.json](config/asset-candidates.example.json)。配置 `asset_enrichment.mode=aggressive` 后，`illustration` 候选会写入 `asset-report.json` 和 `asset-report.md`，但无论置信度多高都不会自动插入正文。
+
+```json
+{
+  "candidates": [
+    {
+      "role": "illustration",
+      "source_url": "https://publisher.example/image.jpg",
+      "record_url": "https://publisher.example/book/volume-1",
+      "rights": "official preview; review before reuse",
+      "volume": "1",
+      "chapter_hint": "第三章候选",
+      "width": 1200,
+      "height": 1800,
+      "confidence": 0.95,
+      "reason": "official-page candidate"
+    }
+  ]
+}
+```
+
+人工复核至少要确认卷册、章节语义、是否剧透、图片完整性和可使用权利。真正的插图定位与 XHTML 写入仍是下一阶段。
 
 ## 正文清洗报告
 
@@ -218,7 +284,7 @@ Hermes 把远端 `/books/书名 - 作者.epub` 当作阅读母本。发布前会
 常用验证命令：
 
 ```powershell
-python -m unittest tests.hermes_books.test_assets tests.hermes_books.test_build_txt tests.hermes_books.test_cleaning tests.hermes_books.test_diff tests.hermes_books.test_inspect tests.hermes_books.test_intake tests.hermes_books.test_metadata tests.hermes_books.test_models_config tests.hermes_books.test_opf_metadata tests.hermes_books.test_pending tests.hermes_books.test_publish tests.hermes_books.test_sources
+python -m unittest tests.hermes_books.test_assets tests.hermes_books.test_build_txt tests.hermes_books.test_cleaning tests.hermes_books.test_diff tests.hermes_books.test_inspect tests.hermes_books.test_intake tests.hermes_books.test_metadata tests.hermes_books.test_models_config tests.hermes_books.test_online_intake tests.hermes_books.test_online_metadata tests.hermes_books.test_opf_metadata tests.hermes_books.test_pending tests.hermes_books.test_publish tests.hermes_books.test_sources tests.hermes_books.test_typography
 python -m compileall scripts\hermes_books tests\hermes_books
 python -m scripts.hermes_books.intake --help
 python -m scripts.hermes_books.pending --help

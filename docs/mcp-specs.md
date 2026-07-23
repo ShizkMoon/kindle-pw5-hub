@@ -17,6 +17,7 @@
 |---|---|---|
 | 本地 TXT/EPUB intake | 已实现 | `scripts.hermes_books.intake.run_intake` |
 | EPUB 检查与质量报告 | 已实现 | `scripts.hermes_books.inspect.inspect_epub` |
+| 排版规范化与审计 | 已实现 | `scripts.hermes_books.typography` |
 | append-safe / metadata-safe diff | 已实现 | `scripts.hermes_books.diff.compare_for_update` |
 | WebDAV 发布与 pending fallback | 已实现 | `scripts.hermes_books.publish.WebDavPublisher` |
 | Pending 候选列出/批准/拒绝 | 已实现 | `scripts.hermes_books.pending` |
@@ -24,7 +25,8 @@
 | OPF metadata 写入 | 已实现 | `scripts.hermes_books.opf_metadata.apply_metadata_to_epub` |
 | 封面候选自动采用 | 已实现 | `scripts.hermes_books.assets` |
 | 正文清洗成本规划报告 | 已实现 | `scripts.hermes_books.cleaning` |
-| 真实网络元数据搜索 provider | 规划 | 待实现 |
+| Google Books/Open Library 元数据 provider | 已实现 | `scripts.hermes_books.online_metadata.OnlineMetadataProvider` |
+| 确定性元数据共识 reasoner | 已实现 | `scripts.hermes_books.online_metadata.DeterministicMetadataReasoner` |
 | LLM reasoner | 规划 | 待实现 |
 | KOReader sidecar migration | 暂缓 | 待单独设计 |
 
@@ -65,7 +67,7 @@
 约束：
 
 - 只接收本地路径。
-- 不默认联网。
+- 只有配置或调用参数显式开启时联网。
 - 不隐藏 pending 原因。
 - 返回 reports 路径，而不是把长报告塞进响应。
 
@@ -183,7 +185,7 @@
 
 #### `metadata_search`
 
-状态：规划。
+状态：可封装。当前 Python 实现支持 Google Books 和 Open Library；零售站、出版社 provider 仍是规划。
 
 职责：
 
@@ -199,7 +201,7 @@
 
 #### `metadata_resolve`
 
-状态：规划。
+状态：确定性规则引擎可封装；LLM reasoner 仍是规划。
 
 职责：
 

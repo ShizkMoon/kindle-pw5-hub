@@ -1,9 +1,17 @@
+import json
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
 
-from scripts.hermes_books.assets import AssetCandidate, AssetEnricher, apply_auto_adopted_assets
+from scripts.hermes_books.assets import (
+    AssetCandidate,
+    AssetEnricher,
+    CuratedAssetManifestProvider,
+    UrlAssetFetcher,
+    apply_auto_adopted_assets,
+    write_asset_reports,
+)
 from scripts.hermes_books.config import AssetEnrichmentConfig
 from scripts.hermes_books.inspect import inspect_epub
 from scripts.hermes_books.models import AssetMode
@@ -136,6 +144,62 @@ class AssetTests(unittest.TestCase):
                 self.assertEqual(archive.read("EPUB/images/hermes-cover.jpg"), b"original non-cover image")
                 self.assertEqual(archive.read("EPUB/images/hermes-cover-2.jpg"), b"new cover image")
             self.assertFalse(inspect_epub(epub_path).missing_cover)
+
+    def test_curated_illustration_manifest_stays_pending_with_provenance(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest_path = root / "asset-candidates.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "candidates": [
+                            {
+                                "role": "illustration",
+                                "source_url": "https://publisher.example/images/scene.jpg",
+                                "record_url": "https://publisher.example/books/volume-1",
+                                "rights": "official preview; review before reuse",
+                                "volume": "1",
+                                "chapter_hint": "第三章候选",
+                                "width": 1200,
+                                "height": 1800,
+                                "confidence": 0.97,
+                                "reason": "curated official-page candidate",
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            provider = CuratedAssetManifestProvider(manifest_path)
+            inspection = inspect_epub(make_epub(root / "book.epub"))
+
+            report = AssetEnricher(
+                AssetEnrichmentConfig(mode=AssetMode.AGGRESSIVE),
+                provider,
+            ).plan("Book", "Author", inspection, root / "cache")
+            write_asset_reports(report, root / "reports")
+
+            self.assertEqual([item.role for item in report.pending], ["illustration"])
+            self.assertEqual(report.auto_adopted, [])
+            markdown = (root / "reports/asset-report.md").read_text(encoding="utf-8")
+            self.assertIn("Pending review", markdown)
+            self.assertIn("publisher.example/books/volume-1", markdown)
+            self.assertIn("第三章候选", markdown)
+
+    def test_url_asset_fetcher_rejects_cleartext_urls(self):
+        candidate = AssetCandidate(
+            role="cover",
+            source_url="http://assets.example/cover.jpg",
+            local_path=Path(""),
+            width=0,
+            height=0,
+            confidence=0.95,
+            reason="test",
+        )
+        with tempfile.TemporaryDirectory() as td:
+            with self.assertRaises(ValueError):
+                UrlAssetFetcher().fetch(candidate, Path(td))
 
 
 if __name__ == "__main__":

@@ -61,6 +61,18 @@ def _media_type_for_href(href: str, default: str) -> str:
     return default
 
 
+def _media_type_for_bytes(data: bytes, default: str) -> str:
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image/webp"
+    return default
+
+
 def _normalise_values(value: Any) -> list[str]:
     if value is None or value == "":
         return []
@@ -257,7 +269,13 @@ def apply_metadata_to_epub(
         and cover_bytes is not None
         and any(decision.field == "cover" for decision in report.applied_decisions)
     ):
-        cover_path = _write_cover(opf_root, opf_path, entries, cover_bytes, cover_media_type)
+        cover_path = _write_cover(
+            opf_root,
+            opf_path,
+            entries,
+            cover_bytes,
+            _media_type_for_bytes(cover_bytes, cover_media_type),
+        )
 
     entries[opf_path] = ElementTree.tostring(opf_root, encoding="utf-8", xml_declaration=True)
     existing_names = {info.filename for info in infos}
