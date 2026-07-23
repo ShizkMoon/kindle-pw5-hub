@@ -7,11 +7,18 @@ import os
 import posixpath
 import subprocess
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from .assets import AssetEnricher, AssetFetcher, AssetProvider, apply_auto_adopted_assets
+from .assets import (
+    AssetEnricher,
+    AssetFetcher,
+    AssetProvider,
+    CuratedAssetManifestProvider,
+    apply_auto_adopted_assets,
+    write_asset_reports,
+)
 from .build import build_draft_from_txt, normalize_existing_epub
 from .cleaning import CleaningAnalyzer, CleaningPlanner, write_cleaning_reports
 from .config import HermesConfig, MetadataEnrichmentMode
@@ -25,9 +32,21 @@ from .metadata import (
     write_metadata_reports,
 )
 from .models import BookJob, BookManifest, UpdateDecision, canonical_id_for, sha256_file
+from .online_metadata import (
+    DeterministicMetadataReasoner,
+    OnlineCoverFetcher,
+    OnlineMetadataProvider,
+)
 from .opf_metadata import apply_metadata_to_epub
 from .publish import HttpWebDavClient, WebDavClient, WebDavPublisher
 from .sources import LocalFileSource, prepare_run_workspace
+from .typography import (
+    TypographyMutationStats,
+    TypographyReport,
+    audit_epub_typography,
+    skipped_typography_report,
+    write_typography_reports,
+)
 
 
 @dataclass
@@ -124,10 +143,18 @@ def _failed_before_inspection_result(
         json.dumps(asset_report, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    (reports_dir / "asset-report.md").write_text(
+        "# Asset enrichment report\n\nAsset enrichment skipped.\n\n"
+        f"Reason: {reason}\n",
+        encoding="utf-8",
+    )
     metadata_report = MetadataEnricher(config.metadata_enrichment).skipped(reason)
     write_metadata_reports(metadata_report, reports_dir)
     manifest.asset_report = asset_report
     manifest.metadata_report = metadata_report.to_dict()
+    typography_report = skipped_typography_report(config.typography, reason)
+    write_typography_reports(typography_report, reports_dir)
+    manifest.typography_report = typography_report.to_dict()
     cleaning_report = CleaningPlanner(config.text_cleaning).skipped(reason)
     write_cleaning_reports(cleaning_report, reports_dir)
     validation = EpubValidationResult(
@@ -161,17 +188,35 @@ def _manifest_path(target_epub_path: str) -> str:
 
 
 def _metadata_clues(job: BookJob, inspection: Any) -> MetadataClues:
-    return MetadataClues(
-        title=job.title,
-        author=job.author,
-        opf_identifier=getattr(inspection, "opf_identifier", ""),
-        existing_metadata={
+    existing_metadata = dict(getattr(inspection, "metadata", {}) or {})
+    existing_metadata.update(
+        {
             "inspection_title": getattr(inspection, "title", ""),
             "inspection_author": getattr(inspection, "author", ""),
             "chapter_titles": [chapter.title for chapter in getattr(inspection, "chapters", [])[:20]],
             "missing_cover": getattr(inspection, "missing_cover", True),
-        },
+        }
     )
+    return MetadataClues(
+        title=job.title,
+        author=job.author,
+        opf_identifier=getattr(inspection, "opf_identifier", ""),
+        existing_metadata=existing_metadata,
+    )
+
+
+def _downgrade_applied_cover(report: Any, reason: str) -> None:
+    failed_covers = [decision for decision in report.applied_decisions if decision.field == "cover"]
+    if not failed_covers:
+        return
+    report.applied_decisions = [
+        decision for decision in report.applied_decisions if decision.field != "cover"
+    ]
+    report.reported_decisions.extend(
+        replace(decision, action="review", reason=reason) for decision in failed_covers
+    )
+    report.errors.append(reason)
+    report.status = "applied" if report.applied_decisions else "reported"
 
 
 def _run_metadata_enrichment(
@@ -207,6 +252,7 @@ def _run_metadata_enrichment(
                 "stable_canonical_id": True,
                 "live_publish_allowed": config.koreader.metadata_location.value != "hashdocsettings",
             },
+            errors=list(getattr(metadata_provider, "errors", []) or []),
         )
     except Exception as exc:
         report = enricher.skipped(f"metadata enrichment failed: {exc}")
@@ -216,28 +262,36 @@ def _run_metadata_enrichment(
     if report.applied_decisions and config.metadata_enrichment.write_epub_metadata:
         try:
             cover_bytes = None
-            if (
-                config.metadata_enrichment.write_cover
-                and any(decision.field == "cover" for decision in report.applied_decisions)
-                and metadata_cover_fetcher is not None
-            ):
-                cover_bytes = metadata_cover_fetcher(report)
-            metadata_output = output_epub.with_name(f"{output_epub.stem}.metadata.epub")
-            before_inspection = inspection
-            output_epub = apply_metadata_to_epub(
-                output_epub,
-                metadata_output,
-                report,
-                cover_bytes=cover_bytes,
-                write_cover=config.metadata_enrichment.write_cover,
-                write_description=config.metadata_enrichment.write_description,
-                write_subjects=config.metadata_enrichment.write_subjects,
+            has_applied_cover = any(
+                decision.field == "cover" for decision in report.applied_decisions
             )
-            inspection = inspect_epub(output_epub)
-            structure_stable = _reader_structure_stable(before_inspection, inspection)
-            report.koreader_guard["reader_structure_stable"] = structure_stable
-            if not structure_stable:
-                report.koreader_guard["live_publish_allowed"] = False
+            if config.metadata_enrichment.write_cover and has_applied_cover:
+                if metadata_cover_fetcher is None:
+                    _downgrade_applied_cover(report, "cover download unavailable: no fetcher configured")
+                else:
+                    try:
+                        cover_bytes = metadata_cover_fetcher(report)
+                        if cover_bytes is None:
+                            raise ValueError("fetcher returned no image bytes")
+                    except Exception as exc:
+                        _downgrade_applied_cover(report, f"cover download failed: {exc}")
+            if report.applied_decisions:
+                metadata_output = output_epub.with_name(f"{output_epub.stem}.metadata.epub")
+                before_inspection = inspection
+                output_epub = apply_metadata_to_epub(
+                    output_epub,
+                    metadata_output,
+                    report,
+                    cover_bytes=cover_bytes,
+                    write_cover=config.metadata_enrichment.write_cover,
+                    write_description=config.metadata_enrichment.write_description,
+                    write_subjects=config.metadata_enrichment.write_subjects,
+                )
+                inspection = inspect_epub(output_epub)
+                structure_stable = _reader_structure_stable(before_inspection, inspection)
+                report.koreader_guard["reader_structure_stable"] = structure_stable
+                if not structure_stable:
+                    report.koreader_guard["live_publish_allowed"] = False
         except Exception as exc:
             report = enricher.skipped(f"metadata apply failed: {exc}")
 
@@ -397,6 +451,25 @@ def run_intake(
     )
     paths = prepare_run_workspace(job)
     snapshot = LocalFileSource(job).snapshot()
+    typography_stats = TypographyMutationStats()
+
+    if (
+        config.online_enrichment.enabled
+        and config.metadata_enrichment.mode != MetadataEnrichmentMode.OFF
+        and metadata_provider is None
+        and metadata_reasoner is None
+    ):
+        metadata_provider = OnlineMetadataProvider(
+            config.online_enrichment,
+            job.runs_root / ".online-cache" / "metadata",
+            evidence_dir=paths.evidence_cache_dir,
+        )
+        metadata_reasoner = DeterministicMetadataReasoner()
+        if metadata_cover_fetcher is None:
+            metadata_cover_fetcher = OnlineCoverFetcher(
+                config.online_enrichment,
+                paths.assets_cache_dir / "online",
+            )
 
     output_epub = snapshot.raw_path
     try:
@@ -407,9 +480,21 @@ def run_intake(
                 paths.draft_dir,
                 language=config.pipeline.language,
             )
-            output_epub = normalize_existing_epub(job, candidate, paths.normalized_dir)
+            output_epub = normalize_existing_epub(
+                job,
+                candidate,
+                paths.normalized_dir,
+                config.typography,
+                typography_stats,
+            )
         elif job.input_format == "epub":
-            output_epub = normalize_existing_epub(job, snapshot.raw_path, paths.normalized_dir)
+            output_epub = normalize_existing_epub(
+                job,
+                snapshot.raw_path,
+                paths.normalized_dir,
+                config.typography,
+                typography_stats,
+            )
         else:
             raise ValueError(f"Unsupported input format for MVP: {job.input_format}")
 
@@ -435,36 +520,61 @@ def run_intake(
         metadata_cover_fetcher,
     )
 
-    asset_cache_dir = job.run_dir / "assets-cache"
     asset_report = AssetEnricher(config.asset_enrichment, asset_provider).plan(
         title,
         author,
         inspection,
-        asset_cache_dir,
+        paths.assets_cache_dir,
     )
-    if apply_auto_adopted_assets(output_epub, asset_report, asset_cache_dir, asset_fetcher):
+    if apply_auto_adopted_assets(
+        output_epub,
+        asset_report,
+        paths.assets_cache_dir,
+        asset_fetcher,
+    ):
         inspection = inspect_epub(output_epub)
+
+    try:
+        typography_report = audit_epub_typography(
+            output_epub,
+            config.typography,
+            typography_stats,
+        )
+    except Exception as exc:
+        typography_report = TypographyReport(
+            mode=config.typography.mode.value,
+            profile=config.typography.profile,
+            status="failed",
+            score=0,
+            mutations=typography_stats,
+            errors=[f"typography audit failed: {exc}"],
+        )
+    write_typography_reports(typography_report, paths.reports_dir)
+    typography_report_data = typography_report.to_dict()
 
     cleaning_report = CleaningPlanner(config.text_cleaning).plan(inspection, analyzer=cleaning_analyzer)
     write_cleaning_reports(cleaning_report, paths.reports_dir)
 
     write_quality_report(inspection, paths.reports_dir / "quality-report.md")
     asset_report_data = json.loads(asset_report.to_json())
-    (paths.reports_dir / "asset-report.json").write_text(
-        json.dumps(asset_report_data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    write_asset_reports(asset_report, paths.reports_dir)
 
     validation = (epub_validator or _default_epub_validator)(output_epub)
     (paths.reports_dir / "epubcheck.json").write_text(validation.to_json(), encoding="utf-8")
 
+    gate_reasons: list[str] = []
+    if config.typography.block_on_failure and typography_report.status == "failed":
+        gate_reasons.append("typography quality gate failed")
     if config.pipeline.require_epubcheck and validation.status != "passed":
+        gate_reasons.append(f"EPUBCheck validation status {validation.status}")
+    if gate_reasons:
         decision = UpdateDecision.BLOCKED_RISKY
         manifest = _manifest_from_inspection(job, snapshot.source_hash, output_epub, inspection, decision)
         manifest.metadata_report = metadata_report_data
         manifest.asset_report = asset_report_data
+        manifest.typography_report = typography_report_data
         (paths.reports_dir / "manifest.json").write_text(manifest.to_json(), encoding="utf-8")
-        reason = f"EPUBCheck validation status {validation.status}"
+        reason = "; ".join(gate_reasons)
         publish_report = {
             "status": "blocked",
             "path": job.webdav_target_path,
@@ -499,6 +609,7 @@ def run_intake(
         manifest = _manifest_from_inspection(job, snapshot.source_hash, output_epub, inspection, decision)
         manifest.metadata_report = metadata_report_data
         manifest.asset_report = asset_report_data
+        manifest.typography_report = typography_report_data
         (paths.reports_dir / "manifest.json").write_text(manifest.to_json(), encoding="utf-8")
         publish_report = {
             "status": "pending",
@@ -522,6 +633,7 @@ def run_intake(
         UpdateDecision.NEW_BOOK,
     )
     candidate_manifest.metadata_report = metadata_report_data
+    candidate_manifest.typography_report = typography_report_data
     if target_exists and not manifest_exists:
         decision = UpdateDecision.BLOCKED_RISKY
         _write_update_diff_report(
@@ -598,6 +710,7 @@ def run_intake(
     manifest = _manifest_from_inspection(job, snapshot.source_hash, output_epub, inspection, decision)
     manifest.metadata_report = metadata_report_data
     manifest.asset_report = asset_report_data
+    manifest.typography_report = typography_report_data
     (paths.reports_dir / "manifest.json").write_text(manifest.to_json(), encoding="utf-8")
 
     try:
@@ -631,10 +744,47 @@ def main() -> None:
     parser.add_argument("-a", "--author", required=True)
     parser.add_argument("--config", default="config/hermes-books.yaml")
     parser.add_argument("--runs-root", default="runs")
+    parser.add_argument(
+        "--asset-candidates",
+        help="Curated JSON candidate manifest; illustrations always remain pending review",
+    )
+    online_group = parser.add_mutually_exclusive_group()
+    online_group.add_argument(
+        "--online-enrichment",
+        action="store_true",
+        help="Enable configured Google Books/Open Library metadata and cover lookup",
+    )
+    online_group.add_argument(
+        "--offline",
+        action="store_true",
+        help="Disable all built-in network enrichment for this run",
+    )
     args = parser.parse_args()
 
     config = HermesConfig.load(Path(args.config))
-    result = run_intake(Path(args.input), args.title, args.author, Path(args.runs_root), config)
+    if args.online_enrichment:
+        config = replace(
+            config,
+            online_enrichment=replace(config.online_enrichment, enabled=True),
+        )
+    elif args.offline:
+        config = replace(
+            config,
+            online_enrichment=replace(config.online_enrichment, enabled=False),
+        )
+    asset_provider = (
+        CuratedAssetManifestProvider(Path(args.asset_candidates))
+        if args.asset_candidates
+        else None
+    )
+    result = run_intake(
+        Path(args.input),
+        args.title,
+        args.author,
+        Path(args.runs_root),
+        config,
+        asset_provider=asset_provider,
+    )
     print(
         json.dumps(
             {

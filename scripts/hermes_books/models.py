@@ -128,12 +128,13 @@ class BookManifest:
     source_hash: str
     output_hash: str
     update_decision: UpdateDecision = UpdateDecision.NEW_BOOK
-    schema_version: int = 1
+    schema_version: int = 2
     chapter_map: list[dict[str, Any]] = field(default_factory=list)
     image_inventory: list[dict[str, Any]] = field(default_factory=list)
     quality_report: dict[str, Any] = field(default_factory=dict)
     asset_report: dict[str, Any] = field(default_factory=dict)
     metadata_report: dict[str, Any] = field(default_factory=dict)
+    typography_report: dict[str, Any] = field(default_factory=dict)
     previous_versions: list[dict[str, Any]] = field(default_factory=list)
 
     def to_json(self) -> str:

@@ -1,0 +1,17 @@
+{
+  "candidates": [
+    {
+      "role": "illustration",
+      "source_url": "https://publisher.example/image.jpg",
+      "record_url": "https://publisher.example/book/volume-1",
+      "local_path": "",
+      "rights": "official preview; review before reuse",
+      "volume": "1",
+      "chapter_hint": "第三章候选",
+      "width": 1200,
+      "height": 1800,
+      "confidence": 0.95,
+      "reason": "official-page candidate"
+    }
+  ]
+}

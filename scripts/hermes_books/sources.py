@@ -12,6 +12,8 @@ class RunPaths:
     raw_dir: Path
     draft_dir: Path
     normalized_dir: Path
+    assets_cache_dir: Path
+    evidence_cache_dir: Path
     reports_dir: Path
 
 
@@ -25,10 +27,26 @@ def prepare_run_workspace(job: BookJob) -> RunPaths:
     raw_dir = job.run_dir / "raw"
     draft_dir = job.run_dir / "draft"
     normalized_dir = job.run_dir / "normalized"
+    assets_cache_dir = job.run_dir / "assets-cache"
+    evidence_cache_dir = job.run_dir / "evidence-cache"
     reports_dir = job.run_dir / "reports"
-    for path in (raw_dir, draft_dir, normalized_dir, reports_dir):
+    for path in (
+        raw_dir,
+        draft_dir,
+        normalized_dir,
+        assets_cache_dir,
+        evidence_cache_dir,
+        reports_dir,
+    ):
         path.mkdir(parents=True, exist_ok=True)
-    return RunPaths(raw_dir, draft_dir, normalized_dir, reports_dir)
+    return RunPaths(
+        raw_dir,
+        draft_dir,
+        normalized_dir,
+        assets_cache_dir,
+        evidence_cache_dir,
+        reports_dir,
+    )
 
 
 class LocalFileSource:

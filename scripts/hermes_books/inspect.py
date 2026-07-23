@@ -28,6 +28,7 @@ class EpubInspection:
     images: list[ImageInfo] = field(default_factory=list)
     issues: list[QualityIssue] = field(default_factory=list)
     missing_cover: bool = True
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 def _string_value(value: Any) -> str:
@@ -54,6 +55,23 @@ def _metadata_first(book: epub.EpubBook, namespace: str, name: str, default: str
         if extracted:
             return extracted
     return default
+
+
+def _metadata_values(book: epub.EpubBook, namespace: str, name: str) -> list[str]:
+    values: list[str] = []
+    for value in book.get_metadata(namespace, name):
+        extracted = _string_value(value)
+        if extracted and extracted not in values:
+            values.append(extracted)
+    return values
+
+
+def _isbn_from_identifiers(identifiers: list[str]) -> str:
+    for identifier in identifiers:
+        normalized = re.sub(r"[^0-9Xx]", "", identifier)
+        if len(normalized) in {10, 13}:
+            return normalized.upper()
+    return ""
 
 
 class _ReaderBodyParser(HTMLParser):
@@ -591,11 +609,25 @@ def inspect_epub(path: Path) -> EpubInspection:
     book = epub.read_epub(str(path))
     opf_path, raw_entries = _epub_raw_entries(path)
     resource_content_by_href = _resource_contents_by_href(opf_path, raw_entries)
+    title = _metadata_first(book, "DC", "title", path.stem)
+    authors = _metadata_values(book, "DC", "creator")
+    identifiers = _metadata_values(book, "DC", "identifier")
     report = EpubInspection(
         path=path,
-        title=_metadata_first(book, "DC", "title", path.stem),
-        author=_metadata_first(book, "DC", "creator", "Unknown"),
-        opf_identifier=_metadata_first(book, "DC", "identifier", ""),
+        title=title,
+        author=authors[0] if authors else "Unknown",
+        opf_identifier=identifiers[0] if identifiers else "",
+        metadata={
+            "title": title,
+            "authors": authors,
+            "publisher": _metadata_first(book, "DC", "publisher", ""),
+            "description": _metadata_first(book, "DC", "description", ""),
+            "subjects": _metadata_values(book, "DC", "subject"),
+            "identifiers": identifiers,
+            "isbn": _isbn_from_identifiers(identifiers),
+            "published_date": _metadata_first(book, "DC", "date", ""),
+            "language": _metadata_first(book, "DC", "language", ""),
+        },
     )
 
     resources_by_href = {

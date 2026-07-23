@@ -128,6 +128,32 @@ class OpfMetadataTests(unittest.TestCase):
             self.assertIn("cover-image", opf_text)
             self.assertIn("hermes-metadata-cover-2.jpg", opf_text)
 
+    def test_apply_metadata_cover_sniffs_png_media_type(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = make_epub(root / "source.epub")
+            report = _report(
+                [
+                    MetadataDecision(
+                        "cover",
+                        "",
+                        "https://example.test/cover.png",
+                        "apply",
+                        0.95,
+                        ["store-1"],
+                        "cover match",
+                    ),
+                ]
+            )
+            png = b"\x89PNG\r\n\x1a\n" + b"test"
+
+            output = apply_metadata_to_epub(source, root / "out.epub", report, cover_bytes=png)
+
+            with zipfile.ZipFile(output) as archive:
+                self.assertIn("EPUB/images/hermes-metadata-cover.png", archive.namelist())
+                opf_text = archive.read("EPUB/content.opf").decode("utf-8")
+            self.assertIn('media-type="image/png"', opf_text)
+
 
 if __name__ == "__main__":
     unittest.main()

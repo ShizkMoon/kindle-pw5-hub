@@ -10,6 +10,15 @@ pipeline:
   output_profile: "koreader"
   language: "zh"
 
+typography:
+  mode: "normalize"        # off | audit-only | normalize
+  profile: "koreader-literary"
+  normalize_fixed_font_sizes: true
+  normalize_absolute_line_heights: true
+  normalize_inline_styles: true
+  require_profile_link: true
+  block_on_failure: true
+
 update_policy:
   default: "append-safe"
   chapter_fingerprint_threshold: 0.98
@@ -35,6 +44,18 @@ metadata_enrichment:
   write_cover: true
   write_description: true
   write_subjects: true
+
+online_enrichment:
+  enabled: true
+  sources: "google-books,open-library"
+  timeout_seconds: 15
+  max_results_per_source: 5
+  cache_ttl_hours: 168
+  min_identity_score: 0.82
+  max_response_bytes: 5000000
+  max_cover_bytes: 15000000
+  google_books_api_key_env: "GOOGLE_BOOKS_API_KEY"
+  user_agent: "kindle-pw5-hub/1.0"
 
 koreader:
   metadata_location: "book_folder"

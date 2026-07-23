@@ -13,6 +13,10 @@ Desktop.ini
 ~$*
 .worktrees/
 
+# Hermes local data and machine-specific configuration
+runs/
+config/hermes-books.yaml
+
 # Python
 __pycache__/
 *.pyc

@@ -20,27 +20,17 @@ from scripts.txt2epub.pipeline import (
 
 from .models import BookJob, canonical_id_for
 from .textdecode import decode_markup
+from .config import TypographyConfig, TypographyMode
+from .typography import (
+    KOREADER_LITERARY_CSS,
+    TypographyMutationStats,
+    normalize_css_bytes,
+    normalize_markup_typography,
+    typography_profile_css,
+)
 
 
-NORMALIZED_EPUB_CSS = """
-html, body {
-  margin: 0;
-  padding: 0;
-}
-body {
-  line-height: 1.6;
-  widows: 2;
-  orphans: 2;
-}
-p {
-  margin: 0 0 0.8em;
-  text-indent: 2em;
-}
-img, svg {
-  max-width: 100%;
-  height: auto;
-}
-""".strip()
+NORMALIZED_EPUB_CSS = KOREADER_LITERARY_CSS
 
 
 def _stable_identifier(job: BookJob) -> str:
@@ -173,7 +163,15 @@ def _inject_stylesheet_link(raw_html: bytes, stylesheet_href: str) -> bytes:
         return raw_html
 
 
-def normalize_existing_epub(job: BookJob, raw_epub_path: Path, normalized_dir: Path) -> Path:
+def normalize_existing_epub(
+    job: BookJob,
+    raw_epub_path: Path,
+    normalized_dir: Path,
+    typography_config: TypographyConfig | None = None,
+    typography_stats: TypographyMutationStats | None = None,
+) -> Path:
+    typography_config = typography_config or TypographyConfig()
+    typography_stats = typography_stats or TypographyMutationStats()
     normalized_dir.mkdir(parents=True, exist_ok=True)
     output = normalized_dir / f"{job.target_slug}.normalized.epub"
     with zipfile.ZipFile(raw_epub_path, "r") as source:
@@ -199,13 +197,18 @@ def normalize_existing_epub(job: BookJob, raw_epub_path: Path, normalized_dir: P
             css_item = item
             css_href = href
             break
-    if css_item is None:
+    if css_item is None and typography_config.mode == TypographyMode.NORMALIZE:
         css_href = _unique_manifest_href(opf_path, entries, "styles/hermes-normalized.css")
         css_item = ElementTree.SubElement(manifest, q("item"))
         css_item.set("id", _unique_manifest_id(manifest, namespace, "hermes-normalized-css"))
         css_item.set("href", css_href)
-    css_item.set("media-type", "text/css")
-    css_archive_path = posixpath.normpath(posixpath.join(posixpath.dirname(opf_path), css_href))
+    if css_item is not None:
+        css_item.set("media-type", "text/css")
+    css_archive_path = (
+        posixpath.normpath(posixpath.join(posixpath.dirname(opf_path), css_href))
+        if css_href
+        else ""
+    )
 
     for item in manifest.findall(q("item")):
         media_type = item.attrib.get("media-type", "")
@@ -214,11 +217,29 @@ def normalize_existing_epub(job: BookJob, raw_epub_path: Path, normalized_dir: P
         if not href or media_type not in {"application/xhtml+xml", "text/html"} or "nav" in properties:
             continue
         item_path = posixpath.normpath(posixpath.join(posixpath.dirname(opf_path), href))
-        if item_path in entries:
-            entries[item_path] = _inject_stylesheet_link(entries[item_path], _relative_href(css_href, href))
+        if item_path in entries and typography_config.mode == TypographyMode.NORMALIZE:
+            normalized_markup = normalize_markup_typography(
+                entries[item_path], typography_config, typography_stats
+            )
+            linked_markup = _inject_stylesheet_link(normalized_markup, _relative_href(css_href, href))
+            if linked_markup != normalized_markup:
+                typography_stats.stylesheet_links_added += 1
+            entries[item_path] = linked_markup
+
+    if typography_config.mode == TypographyMode.NORMALIZE:
+        for item in manifest.findall(q("item")):
+            if item.attrib.get("media-type", "") != "text/css":
+                continue
+            href = item.attrib.get("href", "")
+            item_path = posixpath.normpath(posixpath.join(posixpath.dirname(opf_path), href))
+            if item_path in entries and item_path != css_archive_path:
+                entries[item_path] = normalize_css_bytes(
+                    entries[item_path], typography_config, typography_stats
+                )
 
     entries[opf_path] = ElementTree.tostring(opf_root, encoding="utf-8", xml_declaration=True)
-    entries[css_archive_path] = NORMALIZED_EPUB_CSS.encode("utf-8")
+    if typography_config.mode == TypographyMode.NORMALIZE and css_archive_path:
+        entries[css_archive_path] = typography_profile_css(typography_config).encode("utf-8")
 
     existing_names = {info.filename for info in infos}
     with zipfile.ZipFile(output, "w") as target:

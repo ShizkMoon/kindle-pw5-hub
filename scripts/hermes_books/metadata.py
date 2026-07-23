@@ -47,6 +47,7 @@ class MetadataResolution:
 class MetadataReport:
     mode: str
     status: str
+    resolver: str = ""
     evidence: list[MetadataEvidence] = field(default_factory=list)
     applied_decisions: list[MetadataDecision] = field(default_factory=list)
     reported_decisions: list[MetadataDecision] = field(default_factory=list)
@@ -118,6 +119,7 @@ class MetadataEnricher:
         return MetadataReport(
             mode=self.config.mode.value,
             status=status,
+            resolver=resolution.model,
             evidence=evidence,
             applied_decisions=applied,
             reported_decisions=reported,
@@ -186,6 +188,8 @@ def write_metadata_reports(report: MetadataReport, reports_dir: Path) -> None:
 
 def _metadata_report_markdown(report: MetadataReport) -> str:
     lines = ["# Metadata enrichment report", ""]
+    if report.resolver:
+        lines.append(f"Resolver: {report.resolver}")
     if report.status == "applied":
         fields = "、".join(decision.field for decision in report.applied_decisions)
         lines.append(f"已自动补全 {fields}。")
@@ -199,6 +203,14 @@ def _metadata_report_markdown(report: MetadataReport) -> str:
         location = report.koreader_guard.get("metadata_location", "")
         allowed = report.koreader_guard.get("live_publish_allowed", False)
         lines.append(f"KOReader metadata 模式：{location}；live publish allowed: {allowed}。")
+    if report.evidence:
+        lines.extend(["", "## Evidence"])
+        for evidence in report.evidence:
+            fields = ", ".join(sorted(evidence.facts))
+            lines.append(
+                f"- {evidence.id} [{evidence.source}] ({evidence.confidence:.2f}): "
+                f"{evidence.url} — {fields}"
+            )
     if report.applied_decisions:
         lines.extend(["", "## Applied"])
         for decision in report.applied_decisions:

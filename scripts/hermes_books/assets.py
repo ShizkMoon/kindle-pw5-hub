@@ -8,7 +8,7 @@ import urllib.request
 import zipfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 from xml.etree import ElementTree
 
 from .config import AssetEnrichmentConfig
@@ -25,6 +25,10 @@ class AssetCandidate:
     height: int
     confidence: float
     reason: str
+    record_url: str = ""
+    rights: str = ""
+    volume: str = ""
+    chapter_hint: str = ""
 
 
 @dataclass
@@ -51,6 +55,49 @@ class AssetProvider(Protocol):
 class AssetFetcher(Protocol):
     def fetch(self, candidate: AssetCandidate, cache_dir: Path) -> Path:
         ...
+
+
+class CuratedAssetManifestProvider:
+    """Load human- or agent-curated cover/illustration candidates from JSON."""
+
+    def __init__(self, manifest_path: Path) -> None:
+        self.manifest_path = manifest_path
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        raw_candidates = payload.get("candidates", []) if isinstance(payload, dict) else payload
+        if not isinstance(raw_candidates, list):
+            raise ValueError("asset candidate manifest must contain a candidates list")
+        self._candidates = [self._parse_candidate(item) for item in raw_candidates]
+
+    def _parse_candidate(self, raw: Any) -> AssetCandidate:
+        if not isinstance(raw, dict):
+            raise ValueError("asset candidate must be an object")
+        role = str(raw.get("role", "")).strip().lower()
+        if role not in {"cover", "illustration"}:
+            raise ValueError(f"unsupported asset role: {role!r}")
+        confidence = float(raw.get("confidence", 0))
+        if not 0 <= confidence <= 1:
+            raise ValueError("asset confidence must be between 0 and 1")
+        raw_local_path = str(raw.get("local_path", "")).strip()
+        local_path = Path(raw_local_path) if raw_local_path else Path("")
+        if raw_local_path and not local_path.is_absolute():
+            local_path = (self.manifest_path.parent / local_path).resolve()
+        return AssetCandidate(
+            role=role,
+            source_url=str(raw.get("source_url", "")).strip(),
+            local_path=local_path,
+            width=max(0, int(raw.get("width", 0))),
+            height=max(0, int(raw.get("height", 0))),
+            confidence=confidence,
+            reason=str(raw.get("reason", "curated candidate")).strip(),
+            record_url=str(raw.get("record_url", "")).strip(),
+            rights=str(raw.get("rights", "")).strip(),
+            volume=str(raw.get("volume", "")).strip(),
+            chapter_hint=str(raw.get("chapter_hint", "")).strip(),
+        )
+
+    def candidates(self, title: str, author: str, role: str) -> list[AssetCandidate]:
+        del title, author
+        return [candidate for candidate in self._candidates if candidate.role == role]
 
 
 class GoogleBooksCoverProvider:
@@ -91,24 +138,38 @@ class GoogleBooksCoverProvider:
 
 
 class UrlAssetFetcher:
+    max_bytes = 15_000_000
+
     def fetch(self, candidate: AssetCandidate, cache_dir: Path) -> Path:
         if not candidate.source_url:
             raise ValueError("candidate has no source URL")
+        parsed = urllib.parse.urlparse(candidate.source_url)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise ValueError("asset URL must use HTTPS")
 
         cache_dir.mkdir(parents=True, exist_ok=True)
-        suffix = _image_suffix(Path(urllib.parse.urlparse(candidate.source_url).path).suffix)
+        suffix = _image_suffix(Path(parsed.path).suffix)
         digest = hashlib.sha256(candidate.source_url.encode("utf-8")).hexdigest()[:16]
         target = cache_dir / f"{candidate.role}-{digest}{suffix}"
         if not target.exists():
-            with urllib.request.urlopen(candidate.source_url, timeout=30) as resp:
-                target.write_bytes(resp.read())
+            request = urllib.request.Request(
+                candidate.source_url,
+                headers={"User-Agent": "kindle-pw5-hub/1.0", "Accept": "image/*"},
+            )
+            with urllib.request.urlopen(request, timeout=30) as resp:
+                data = resp.read(self.max_bytes + 1)
+            if len(data) > self.max_bytes:
+                raise ValueError(f"asset exceeds {self.max_bytes} bytes")
+            if not _supported_image_bytes(data):
+                raise ValueError("asset response is not a supported image")
+            target.write_bytes(data)
         return target
 
 
 class AssetEnricher:
     def __init__(self, config: AssetEnrichmentConfig, provider: AssetProvider | None = None) -> None:
         self.config = config
-        self.provider = provider or GoogleBooksCoverProvider()
+        self.provider = provider
 
     def plan(
         self,
@@ -130,7 +191,7 @@ class AssetEnricher:
 
         for role in roles:
             try:
-                candidates = self.provider.candidates(title, author, role)
+                candidates = self.provider.candidates(title, author, role) if self.provider else []
             except Exception as exc:
                 report.errors.append(f"{role}: {exc}")
                 candidates = []
@@ -158,6 +219,49 @@ class AssetEnricher:
         return report
 
 
+def write_asset_reports(report: AssetReport, reports_dir: Path) -> None:
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    (reports_dir / "asset-report.json").write_text(report.to_json(), encoding="utf-8")
+    lines = [
+        "# Asset enrichment report",
+        "",
+        f"Auto adopted: {len(report.auto_adopted)}",
+        f"Pending review: {len(report.pending)}",
+        f"Missing roles: {', '.join(report.missing_roles) or 'None'}",
+    ]
+    for heading, candidates in (
+        ("Auto adopted", report.auto_adopted),
+        ("Pending review", report.pending),
+    ):
+        lines.extend(["", f"## {heading}", ""])
+        if not candidates:
+            lines.append("- None")
+            continue
+        for candidate in candidates:
+            details = [
+                f"confidence={candidate.confidence:.2f}",
+                f"size={candidate.width}x{candidate.height}" if candidate.width and candidate.height else "size=unknown",
+                f"reason={candidate.reason}",
+            ]
+            if candidate.volume:
+                details.append(f"volume={candidate.volume}")
+            if candidate.chapter_hint:
+                details.append(f"chapter={candidate.chapter_hint}")
+            if candidate.rights:
+                details.append(f"rights={candidate.rights}")
+            lines.append(f"- {candidate.role}: {'; '.join(details)}")
+            if candidate.record_url:
+                lines.append(f"  - Record: {candidate.record_url}")
+            if candidate.source_url:
+                lines.append(f"  - Asset: {candidate.source_url}")
+            if str(candidate.local_path) not in {"", "."}:
+                lines.append(f"  - Local: {candidate.local_path}")
+    if report.errors:
+        lines.extend(["", "## Errors", ""])
+        lines.extend(f"- {error}" for error in report.errors)
+    (reports_dir / "asset-report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def _image_suffix(raw_suffix: str) -> str:
     suffix = raw_suffix.lower()
     if suffix in {".jpg", ".jpeg", ".png", ".gif", ".webp"}:
@@ -165,8 +269,17 @@ def _image_suffix(raw_suffix: str) -> str:
     return ".jpg"
 
 
+def _supported_image_bytes(data: bytes) -> bool:
+    return (
+        data.startswith(b"\xff\xd8\xff")
+        or data.startswith(b"\x89PNG\r\n\x1a\n")
+        or data.startswith((b"GIF87a", b"GIF89a"))
+        or (data.startswith(b"RIFF") and data[8:12] == b"WEBP")
+    )
+
+
 def _existing_candidate_path(candidate: AssetCandidate, cache_dir: Path) -> Path | None:
-    if not str(candidate.local_path):
+    if str(candidate.local_path) in {"", "."}:
         return None
     path = candidate.local_path
     if not path.is_absolute():
